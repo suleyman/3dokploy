@@ -1,0 +1,49 @@
+{
+  "name": "3dokploy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A live, isometric sci-fi view of your Dokploy: projects as buildings, services as racks, deploys on carts. Read-only.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n relay,web -c cyan,magenta \"npm:dev:relay\" \"npm:dev:web\"",
+    "dev:relay": "node --experimental-strip-types --watch server/index.ts",
+    "dev:web": "vite",
+    "build": "tsc --noEmit && vite build",
+    "start": "node --experimental-strip-types server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "preview": "npm run build && npm start"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/onest": "^5.3.1",
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
+    "@react-three/postprocessing": "^3.2.0",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "postprocessing": "^6.39.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.186.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.4",
+    "zustand": "^5.0.15"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suleyman/3dokploy.git"
+  },
+  "homepage": "https://github.com/suleyman/3dokploy#readme"
+}

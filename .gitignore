@@ -1,0 +1,12 @@
+node_modules
+dist
+
+# Secrets: never commit env files (only the documented example)
+.env
+.env.*
+!.env.example
+*.local
+
+# OS / editor / logs
+.DS_Store
+*.log
