@@ -15,13 +15,8 @@ const base = (p: P) => ({
   ...p,
 });
 
-export const Logo = (p: P) => (
-  <svg {...base({ width: 22, height: 22, ...p })} viewBox="0 0 32 32" stroke="none">
-    <rect width="32" height="32" rx="8" fill="var(--accent)" />
-    <path d="M16 6 26 11.5v9L16 26 6 20.5v-9z" fill="none" stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
-    <path d="M6 11.5 16 17l10-5.5M16 17v9" fill="none" stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
-  </svg>
-);
+/** The app icon: same file as the favicon and the Dokploy template logo. */
+export const Logo = () => <img className="brand-logo" src="/favicon.svg" width={26} height={26} alt="" />;
 
 export const SearchIcon = (p: P) => (
   <svg {...base(p)}>

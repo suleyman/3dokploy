@@ -240,8 +240,9 @@ code {
   gap: 9px;
   flex: none;
 }
-.brand svg {
-  filter: drop-shadow(0 0 8px rgb(124 108 255 / 0.6));
+.brand-logo {
+  display: block;
+  filter: drop-shadow(0 0 8px rgb(124 108 255 / 0.5));
 }
 .brand-name {
   font-family: var(--mono);
