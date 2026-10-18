@@ -13,7 +13,6 @@ export function ProjectPanel() {
   const services = useStore((s) => s.services);
   const environments = useStore((s) => s.environments);
   const deployments = useStore((s) => s.deployments);
-  const caps = useStore((s) => s.capabilities);
   const now = useStore((s) => s.now);
 
   const data = useMemo(() => {
@@ -83,25 +82,21 @@ export function ProjectPanel() {
           <span className="label">Deploying</span>
           <b className={`num ${data.deploying ? 'info' : ''}`}>{data.deploying}</b>
         </div>
-        {caps.metrics && (
-          <>
-            <div>
-              <span className="label">CPU</span>
-              <b className="num">
-                {data.cpu.toFixed(2)}
-                <small> cores</small>
-              </b>
-            </div>
-            <div>
-              <span className="label">Memory</span>
-              <b className="num">{mb(data.mem)}</b>
-            </div>
-            <div>
-              <span className="label">Network</span>
-              <b className="num">{rate(data.net)}</b>
-            </div>
-          </>
-        )}
+        <div>
+          <span className="label">CPU</span>
+          <b className="num">
+            {data.cpu.toFixed(2)}
+            <small> cores</small>
+          </b>
+        </div>
+        <div>
+          <span className="label">Memory</span>
+          <b className="num">{mb(data.mem)}</b>
+        </div>
+        <div>
+          <span className="label">Network</span>
+          <b className="num">{rate(data.net)}</b>
+        </div>
       </div>
 
       {data.envs.map(({ env, nodes }) => (
@@ -116,7 +111,7 @@ export function ProjectPanel() {
                   <span className="kind-chip" style={{ ['--kind' as string]: KIND_COLOR[n.kind] }}>
                     {KIND_LABEL[n.kind]}
                   </span>
-                  {caps.metrics && <span className="num muted small">{n.status === 'running' ? pct(n.cpu) : '—'}</span>}
+                  <span className="num muted small">{n.status === 'running' ? pct(n.cpu) : '—'}</span>
                 </button>
               </li>
             ))}
@@ -124,7 +119,7 @@ export function ProjectPanel() {
         </section>
       ))}
 
-      {caps.deployments && data.deploys.length > 0 && (
+      {data.deploys.length > 0 && (
         <section>
           <h3 className="section-title">Recent deploys</h3>
           <ul className="mini-list">

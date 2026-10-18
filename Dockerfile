@@ -1,4 +1,5 @@
-# 3Dokploy: the web app + its stateless, read-only Dokploy relay in one small image.
+# 3Dokploy: the web app + its small read-only Dokploy API server in one image.
+# Needs DOKPLOY_URL and DOKPLOY_API_KEY at runtime.
 
 FROM node:24-alpine AS build
 WORKDIR /app

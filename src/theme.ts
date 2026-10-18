@@ -38,5 +38,4 @@ export const STATUS_LABEL: Record<ServiceStatus, string> = {
 export const TRIGGER_LABEL: Record<DeployTrigger, string> = {
   push: 'git push',
   manual: 'manual',
-  'auto-heal': 'auto-heal',
 };

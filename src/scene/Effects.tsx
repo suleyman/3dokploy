@@ -38,7 +38,7 @@ export function DeployBeams({ layout }: { layout: Layout }) {
   const services = useStore((s) => s.services);
   const deployments = useStore((s) => s.deployments);
 
-  // Deploying per Dokploy's status, or with a deploy record in flight (mock).
+  // Deploying per Dokploy's status, or with a deploy record in flight.
   const active = useMemo(() => {
     const byService = new Map<string, Deployment>();
     for (const d of Object.values(deployments)) if (isActiveDeploy(d)) byService.set(d.serviceId, d);

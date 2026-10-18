@@ -1,11 +1,14 @@
 import { useMemo, type ReactNode } from 'react';
 import { isActiveDeploy } from '../data/types';
-import { num, rate } from '../format';
+import { rate } from '../format';
 import { useStore } from '../store';
 
 export function Kpis() {
-  const metrics = useStore((s) => s.capabilities.metrics);
-  return <section className="kpis" aria-label="Cluster metrics">{metrics ? <MetricKpis /> : <InventoryKpis />}</section>;
+  return (
+    <section className="kpis" aria-label="Cluster metrics">
+      <MetricKpis />
+    </section>
+  );
 }
 
 function Kpi({ label, value, sub, tone, children }: { label: string; value: ReactNode; sub?: ReactNode; tone?: string; children?: ReactNode }) {
@@ -16,49 +19,6 @@ function Kpi({ label, value, sub, tone, children }: { label: string; value: Reac
       {sub !== undefined && <span className={`kpi-sub ${tone ?? ''}`}>{sub}</span>}
       {children}
     </div>
-  );
-}
-
-/** Live Dokploy data has no metrics yet: show the inventory and health instead. */
-function InventoryKpis() {
-  const projects = useStore((s) => s.projects);
-  const environments = useStore((s) => s.environments);
-  const services = useStore((s) => s.services);
-
-  const k = useMemo(() => {
-    const all = Object.values(services);
-    return {
-      projects: Object.keys(projects).length,
-      envs: Object.keys(environments).length,
-      total: all.length,
-      dbs: all.filter((s) => !['app', 'compose'].includes(s.kind)).length,
-      running: all.filter((s) => s.status === 'running').length,
-      deploying: all.filter((s) => s.status === 'deploying').length,
-      down: all.filter((s) => s.status === 'error').length,
-      idle: all.filter((s) => s.status === 'idle').length,
-    };
-  }, [projects, environments, services]);
-
-  return (
-    <>
-      <Kpi label="Projects" value={k.projects} sub={`${k.envs} environment${k.envs === 1 ? '' : 's'}`} />
-      <Kpi label="Nodes" value={k.total} sub={`${k.total - k.dbs} apps · ${k.dbs} databases`} />
-      <Kpi
-        label="Running"
-        value={
-          <>
-            {k.running}
-            <small> / {k.total}</small>
-          </>
-        }
-        sub={k.idle ? `${k.idle} idle` : 'none idle'}
-        tone="ok"
-      >
-        <Meter value={k.total ? k.running / k.total : 0} health />
-      </Kpi>
-      <Kpi label="Deploying" value={k.deploying} sub={k.deploying ? 'in progress' : 'nothing in flight'} tone={k.deploying ? 'info' : ''} />
-      <Kpi label="Down" value={k.down} sub={k.down ? 'needs attention' : 'all healthy'} tone={k.down ? 'crit' : 'ok'} />
-    </>
   );
 }
 
@@ -76,7 +36,6 @@ function MetricKpis() {
     const cores = hosts.reduce((a, s) => a + (s.vcpu ?? 0), 0);
     const ramGb = hosts.reduce((a, s) => a + (s.ramGb ?? 0), 0);
     const usedCores = all.reduce((a, s) => a + s.cpu, 0);
-    const rps = all.some((s) => s.rps !== undefined) ? all.reduce((a, s) => a + (s.rps ?? 0), 0) : undefined;
     return {
       total: all.length,
       up: all.filter((s) => s.status === 'running' || s.status === 'deploying').length,
@@ -88,7 +47,6 @@ function MetricKpis() {
       ramGb,
       rx: all.reduce((a, s) => a + (s.net?.rxBps ?? 0), 0),
       tx: all.reduce((a, s) => a + (s.net?.txBps ?? 0), 0),
-      rps,
     };
   }, [services, servers]);
 
@@ -140,7 +98,7 @@ function MetricKpis() {
       >
         <Trend values={trends.mem} />
       </Kpi>
-      <Kpi label="Network" value={rate(k.rx + k.tx)} sub={k.rps !== undefined ? `${num(k.rps)} req/s` : `↓ ${rate(k.rx)} · ↑ ${rate(k.tx)}`}>
+      <Kpi label="Network" value={rate(k.rx + k.tx)} sub={`↓ ${rate(k.rx)} · ↑ ${rate(k.tx)}`}>
         <Trend values={trends.net} />
       </Kpi>
       <Kpi

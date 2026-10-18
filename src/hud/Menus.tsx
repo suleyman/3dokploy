@@ -19,7 +19,6 @@ export interface MenuItem {
 
 /** Buttons for the header, with live counts. */
 export function useMenuItems(): MenuItem[] {
-  const caps = useStore((s) => s.capabilities);
   const deployments = useStore((s) => s.deployments);
   const alerts = useStore((s) => s.alerts);
   const services = useStore((s) => s.services);
@@ -33,16 +32,12 @@ export function useMenuItems(): MenuItem[] {
     const unseen = events.filter((e) => e.at > seenAt).length;
     return [
       { id: 'activity' as const, label: 'Activity', count: unseen, tone: unseen ? ('info' as const) : undefined },
-      ...(caps.deployments
-        ? [
-            { id: 'deploys' as const, label: 'Deploys', count: active, tone: active ? ('info' as const) : undefined },
-            { id: 'alerts' as const, label: 'Alerts', count: open, tone: open ? ('crit' as const) : undefined },
-          ]
-        : []),
+      { id: 'deploys' as const, label: 'Deploys', count: active, tone: active ? ('info' as const) : undefined },
+      { id: 'alerts' as const, label: 'Alerts', count: open, tone: open ? ('crit' as const) : undefined },
       { id: 'services' as const, label: 'Nodes', count: Object.keys(services).length },
       { id: 'projects' as const, label: 'Projects', count: Object.keys(projects).length },
     ];
-  }, [caps.deployments, deployments, alerts, services, projects, events, seenAt]);
+  }, [deployments, alerts, services, projects, events, seenAt]);
 }
 
 /** Pick an item: select a node (or open a project) and close the menu. */
@@ -181,7 +176,6 @@ function NodeList() {
   const projects = useStore((s) => s.projects);
   const environments = useStore((s) => s.environments);
   const search = useStore((s) => s.search);
-  const metrics = useStore((s) => s.capabilities.metrics);
   const choose = useChoose();
   const input = useRef<HTMLInputElement>(null);
 
@@ -231,12 +225,10 @@ function NodeList() {
                     {projects[s.projectId]?.name} · {environments[s.environmentId]?.name} · {KIND_LABEL[s.kind]}
                   </span>
                 </span>
-                {metrics && (
-                  <span className="row-side num small">
-                    <span>{pct(s.cpu)}</span>
-                    <span className="muted">{mb(s.memMb)}</span>
-                  </span>
-                )}
+                <span className="row-side num small">
+                  <span>{pct(s.cpu)}</span>
+                  <span className="muted">{mb(s.memMb)}</span>
+                </span>
               </button>
             </li>
           ))}

@@ -1,6 +1,6 @@
 /**
  * Deploy carts and the technician. All motion runs in useFrame on refs; the store only hears
- * about milestones (cart docked / cart gone / incident fixed).
+ * when a cart is gone.
  */
 import { RoundedBox } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
@@ -14,7 +14,6 @@ import { Label } from './Label';
 const CART_SPEED = 3.2;
 const TECH_SPEED = 2.3;
 const TECH_DX = 0.42;
-const WORK_SECONDS = 2.5;
 const FACE_RACK = Math.PI; // racks face +z, so agents look toward -z
 
 // ---- path following -----------------------------------------------------------------
@@ -72,19 +71,17 @@ function dampAngle(current: number, target: number, lambda: number, dt: number) 
 // ---- carts ----------------------------------------------------------------------------
 
 /**
- * Deploy carts, plus the technician. In the simulation he "fixes" incidents ('fix'); against a real
- * Dokploy he only goes to look ('watch') and leaves when Dokploy reports the node healthy again.
+ * Deploy carts, plus the technician: he walks to nodes in error and leaves when Dokploy reports
+ * them healthy again.
  */
-export type TechMode = 'fix' | 'watch';
-
-export function Agents({ layout, technician }: { layout: Layout; technician: TechMode }) {
+export function Agents({ layout }: { layout: Layout }) {
   const carts = useStore((s) => s.carts);
   return (
     <>
       {carts.map((id) => (
         <Cart key={id} deploymentId={id} layout={layout} />
       ))}
-      <Technician layout={layout} behavior={technician} />
+      <Technician layout={layout} />
       <HomeMarker at={layout.home} />
     </>
   );
@@ -108,12 +105,9 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
   const terminalRef = useRef(terminal);
   terminalRef.current = terminal;
 
-  // No place to drive to (unknown service): skip the animation but keep the deploy moving.
+  // No place to drive to (unknown service): no animation, drop the cart once the deploy ends.
   useEffect(() => {
-    if (route) return;
-    const { cartArrived, cartGone } = useStore.getState();
-    if (!terminal) cartArrived(deploymentId);
-    else cartGone(deploymentId);
+    if (!route && terminal) useStore.getState().cartGone(deploymentId);
   }, [route, terminal, deploymentId]);
 
   useFrame((_, rawDt) => {
@@ -129,7 +123,6 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
       if (st.walker.step(CART_SPEED * dt)) {
         st.phase = 'docked';
         setPhase('docked');
-        useStore.getState().cartArrived(deploymentId);
       }
     } else if (st.phase === 'docked') {
       st.docked += dt;
@@ -231,7 +224,7 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
 
 type TechPhase = 'idle' | 'walk' | 'work' | 'home';
 
-function Technician({ layout, behavior }: { layout: Layout; behavior: TechMode }) {
+function Technician({ layout }: { layout: Layout }) {
   const alerts = useStore((s) => s.alerts);
   const services = useStore((s) => s.services);
   const still = useStore((s) => s.reducedMotion);
@@ -253,7 +246,6 @@ function Technician({ layout, behavior }: { layout: Layout; behavior: TechMode }
     walker: null as Walker | null,
     target: null as string | null,
     at: null as string | null,
-    work: 0,
     t: 0,
   });
 
@@ -298,19 +290,12 @@ function Technician({ layout, behavior }: { layout: Layout; behavior: TechMode }
           st.at = st.target;
           if (st.at && queueRef.current.includes(st.at)) {
             st.phase = 'work';
-            st.work = 0;
             setMode('work');
           } else next();
         }
         break;
       case 'work':
-        st.work += dt;
-        if (behavior === 'fix' && st.work >= WORK_SECONDS) {
-          useStore.getState().techFixed(st.at!);
-          next();
-        } else if (behavior === 'watch' && !queueRef.current.includes(st.at!)) {
-          next(); // Dokploy says it's healthy again
-        }
+        if (!queueRef.current.includes(st.at!)) next(); // Dokploy says it's healthy again
         break;
       case 'home':
         if (st.walker!.step(TECH_SPEED * dt)) {
@@ -351,7 +336,7 @@ function Technician({ layout, behavior }: { layout: Layout; behavior: TechMode }
         <Label position={[0, 1.6, 0]} zIndex={9}>
           <div className="bubble">
             <span className="bubble-spinner" />
-            {behavior === 'fix' ? 'Restarting…' : 'Investigating…'}
+            Investigating…
           </div>
         </Label>
       )}

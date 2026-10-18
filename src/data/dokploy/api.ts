@@ -1,6 +1,6 @@
 /**
  * Dokploy REST client + normalisation into 3Dokploy's types. Read-only: only GET endpoints.
- * Runs in the browser; requests go through a `Transport` (the relay in server/ in practice).
+ * Runs in the browser; requests go through a `Transport` (this app's own server in practice).
  *
  * Endpoints (verified against a v0.29.8 instance's OpenAPI document):
  *   project.all, project.one          → projects, environments, services + status
@@ -61,30 +61,18 @@ export const LOCAL_SERVER: Server = { id: 'local', name: 'dokploy (local)' };
 
 // ---- transport -------------------------------------------------------------------------
 
-export interface Connection {
-  /** Dokploy base URL, e.g. https://dokploy.example.com */
-  url: string;
-  /** Empty when the server holds the key (`managed`). */
-  apiKey: string;
-  /** The server is pinned to this Dokploy and owns the key (DOKPLOY_URL + DOKPLOY_API_KEY). */
-  managed?: boolean;
-}
-
 /**
- * Browsers can't call Dokploy directly (no CORS, and plain-http instances are mixed content on
- * an https site), so requests go to this app's own relay, which forwards them. The key travels
- * per request in a header; the relay keeps nothing.
+ * Browsers can't call Dokploy directly (no CORS, and the API key must not reach the page), so
+ * requests go to this app's own server under the same path (/api/<procedure>). It adds the key
+ * from its environment and only forwards read-only endpoints.
  */
-export function relayTransport(conn: Connection, base = '/relay'): Transport {
+export function serverTransport(): Transport {
   return async (path, timeoutMs = 10_000) => {
     let res: Response;
     try {
-      // A pinned server ignores the URL header and, when managed, supplies the key itself.
-      const headers: Record<string, string> = { accept: 'application/json' };
-      if (!conn.managed) Object.assign(headers, { 'x-dokploy-url': conn.url, 'x-dokploy-key': conn.apiKey });
-      res = await fetch(base + path, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetch(path, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
-      throw new UpstreamError(`Can't reach the 3Dokploy relay (${(e as Error).message})`);
+      throw new UpstreamError(`Can't reach the 3Dokploy server (${(e as Error).message})`);
     }
     if (res.ok) return res.json();
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -116,7 +104,7 @@ export const time = (v: unknown) => {
   return Number.isFinite(t) ? t : undefined;
 };
 
-/** Cheapest authenticated call: used to check a URL + key before connecting. */
+/** Cheapest authenticated call. */
 export const fetchVersion = (t: Transport) => get<string>(t, '/api/settings.getDokployVersion', 15_000);
 
 // ---- structure: projects → environments → services ---------------------------------------
@@ -363,7 +351,7 @@ function cartNumber(id: string) {
   return (Math.abs(h) % 8) + 1;
 }
 
-/** Dokploy deployment → Shipyard deployment (without stages / log, the collector adds those). */
+/** Dokploy deployment → 3Dokploy deployment (without stages / log, the collector adds those). */
 export function mapDeployment(d: Raw): Omit<Deployment, 'stages' | 'log'> & { errorMessage?: string } | null {
   const serviceId = str(d.applicationId) ?? str(d.composeId);
   const id = str(d.deploymentId);
