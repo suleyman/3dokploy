@@ -1,7 +1,7 @@
 {
   "id": "3dokploy",
   "name": "3Dokploy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A live, isometric 3D view of your Dokploy: projects as buildings, services as racks, deploys rolling in on carts, network traffic as packets. Read-only.",
   "logo": "3dokploy.svg",
   "links": {
