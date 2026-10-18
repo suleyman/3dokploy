@@ -6,7 +6,7 @@ import { isDb, type Service } from '../data/types';
 import { mb, pct } from '../format';
 import { RACK, TANK, type Layout, type Slot } from '../layout';
 import { matchesSearch, useStore } from '../store';
-import { ACCENT, KIND_COLOR, NEON, STATUS_LABEL } from '../theme';
+import { ACCENT, KIND_COLOR, NEON } from '../theme';
 import { Label } from './Label';
 import { CABINET, CABINET_DOOR, DIM_OPACITY, GEO, TANK_BODY, heatColor, ledMaterial } from './materials';
 
@@ -22,7 +22,7 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
   const project = useStore((s) => s.projects[slot.projectId]);
   const env = useStore((s) => s.environments[slot.environmentId]);
   const search = useStore((s) => s.search);
-  const heatmap = useStore((s) => s.heatmap && s.capabilities.metrics);
+  const heatmap = useStore((s) => s.heatmap);
 
   if (!svc) return null;
   const dim = !matchesSearch(svc, project, search, env);
@@ -199,20 +199,13 @@ function Ring({ slot, color, opacity, pulse }: { slot: Slot; color: string; opac
 
 function HoverTip({ slot }: { slot: Slot }) {
   const svc = useStore((s) => s.services[slot.serviceId]);
-  const metrics = useStore((s) => s.capabilities.metrics);
   if (!svc) return null;
   return (
     <Label position={[slot.pos[0], unitHeight(svc) + 0.45, slot.pos[2]]} zIndex={12}>
       <div className="tip">
         <strong>{svc.name}</strong>
-        {metrics ? (
-          <>
-            <span>CPU {pct(svc.cpu)}</span>
-            <span>{mb(svc.memMb)}</span>
-          </>
-        ) : (
-          <span className={`tip-status is-${svc.status}`}>{STATUS_LABEL[svc.status]}</span>
-        )}
+        <span>CPU {pct(svc.cpu)}</span>
+        <span>{mb(svc.memMb)}</span>
       </div>
     </Label>
   );

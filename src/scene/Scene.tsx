@@ -27,9 +27,6 @@ const PAN_MARGIN = 8;
 
 export function Scene() {
   const layout = useStore((s) => s.layout);
-  const carts = useStore((s) => s.capabilities.deployments);
-  const technician = useStore((s) => s.capabilities.simulation);
-  const metrics = useStore((s) => s.capabilities.metrics);
   const session = useStore((s) => s.session);
 
   return (
@@ -70,7 +67,7 @@ export function Scene() {
       <Ground />
       <LedDriver />
       {layout && (
-        // Keyed by session: switching Dokploy ↔ demo rebuilds agents, effects and the camera fit.
+        // Keyed by session: a reconnect rebuilds agents, effects and the camera fit.
         <group key={session}>
           {layout.buildings.map((b) => (
             <Building key={b.projectId} b={b} />
@@ -79,10 +76,10 @@ export function Scene() {
             <ServiceUnit key={slot.serviceId} slot={slot} />
           ))}
           <Markers layout={layout} />
-          {carts && <Agents layout={layout} technician={technician ? 'fix' : 'watch'} />}
+          <Agents layout={layout} />
           <DeployBeams layout={layout} />
           <Pulses layout={layout} />
-          {metrics && <DataFlow layout={layout} />}
+          <DataFlow layout={layout} />
           <CameraRig layout={layout} />
         </group>
       )}
@@ -145,10 +142,10 @@ interface CameraAnim {
 const corners = (b: BuildingLayout) =>
   [b.x, b.x + b.w].flatMap((x) => [b.z, b.z + b.d + 1.6].flatMap((z) => [0, WALL.high + 0.9].map((y) => new THREE.Vector3(x, y, z))));
 
-/** Opening / reset view: every building (and the technician's spot when agents are on). */
-function fitView(layout: Layout, width: number, height: number, agents: boolean) {
+/** Opening / reset view: every building and the technician's spot. */
+function fitView(layout: Layout, width: number, height: number) {
   const pts = layout.buildings.flatMap(corners);
-  if (agents || !pts.length) pts.push(new THREE.Vector3(...layout.home), new THREE.Vector3(...layout.home).setY(1.2));
+  pts.push(new THREE.Vector3(...layout.home), new THREE.Vector3(...layout.home).setY(1.2));
   return fitPoints(pts, width, height, 1);
 }
 
@@ -222,7 +219,6 @@ function CameraRig({ layout }: { layout: Layout }) {
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
   const size = useThree((s) => s.size);
   const still = useStore((s) => s.reducedMotion);
-  const agents = useStore((s) => s.capabilities.simulation);
   const anim = useRef<CameraAnim | null>(null);
   const placed = useRef(false);
   const tmp = useMemo(() => new THREE.Vector3(), []);
@@ -379,13 +375,13 @@ function CameraRig({ layout }: { layout: Layout }) {
   useEffect(() => {
     if (!controls || placed.current) return;
     placed.current = true;
-    const view = fitView(layout, sizeRef.current.width, sizeRef.current.height, true);
+    const view = fitView(layout, sizeRef.current.width, sizeRef.current.height);
     controls.target.copy(view.target);
     camera.position.copy(view.target).add(OFFSET);
     camera.zoom = view.zoom;
     camera.updateProjectionMatrix();
     controls.update();
-  }, [controls, camera, layout, agents]);
+  }, [controls, camera, layout]);
 
   // Any user input cancels a running camera animation.
   useEffect(() => {
@@ -437,14 +433,14 @@ function CameraRig({ layout }: { layout: Layout }) {
               break;
             }
             case 'reset': {
-              const view = fitView(layout, sizeRef.current.width, sizeRef.current.height, true);
+              const view = fitView(layout, sizeRef.current.width, sizeRef.current.height);
               anim.current = { target: view.target, position: view.target.clone().add(OFFSET), zoom: view.zoom };
               break;
             }
           }
         }
       }),
-    [layout, camera, agents, controls],
+    [layout, camera, controls],
   );
 
   useFrame((_, dt) => {

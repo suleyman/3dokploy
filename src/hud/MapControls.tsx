@@ -4,7 +4,6 @@ import { ExpandIcon, FlameIcon, MinusIcon, MuteIcon, PlusIcon, ResetIcon, Shrink
 
 export function MapControls() {
   const heatmap = useStore((s) => s.heatmap);
-  const metrics = useStore((s) => s.capabilities.metrics);
   const muted = useStore((s) => s.muted);
   const fullscreen = useFullscreen();
   const cmd = useStore((s) => s.cameraCommand);
@@ -34,20 +33,18 @@ export function MapControls() {
           </button>
         )}
       </div>
-      {metrics && (
-        <div className="rail-group panel">
-          <button
-            type="button"
-            className={`icon-btn ${heatmap ? 'is-on' : ''}`}
-            onClick={() => useStore.getState().toggleHeatmap()}
-            aria-pressed={heatmap}
-            aria-label="CPU heatmap"
-            title="CPU heatmap"
-          >
-            <FlameIcon />
-          </button>
-        </div>
-      )}
+      <div className="rail-group panel">
+        <button
+          type="button"
+          className={`icon-btn ${heatmap ? 'is-on' : ''}`}
+          onClick={() => useStore.getState().toggleHeatmap()}
+          aria-pressed={heatmap}
+          aria-label="CPU heatmap"
+          title="CPU heatmap"
+        >
+          <FlameIcon />
+        </button>
+      </div>
       <div className="rail-group panel">
         <button
           type="button"
@@ -60,7 +57,7 @@ export function MapControls() {
           {muted ? <MuteIcon /> : <SoundIcon />}
         </button>
       </div>
-      {metrics && heatmap && (
+      {heatmap && (
         <div className="heat-legend panel" aria-hidden>
           <span>100%</span>
           <i />

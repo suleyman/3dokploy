@@ -90,8 +90,6 @@ export class Collector {
 
   constructor(
     private readonly t: Transport,
-    /** Shown as the server's address (the Dokploy hostname the user connected to). */
-    private readonly hostLabel: string,
     private readonly publish: Publish,
   ) {}
 
@@ -294,7 +292,7 @@ export class Collector {
 
     const servers = s.servers.map((sv) =>
       sv.id === 'local'
-        ? { ...sv, name: this.host.hostname ?? sv.name, host: this.hostLabel, vcpu: this.host.vcpu, ramGb: this.host.ramGb }
+        ? { ...sv, name: this.host.hostname ?? sv.name, host: this.host.host, vcpu: this.host.vcpu, ramGb: this.host.ramGb }
         : sv,
     );
 
@@ -371,7 +369,7 @@ export class Collector {
     const k = key.split(':')[0];
     if (this.warned.has(k)) return;
     this.warned.add(k);
-    console.warn(`[shipyard] ${k}: ${(e as Error).message}`);
+    console.warn(`[3dokploy] ${k}: ${(e as Error).message}`);
   }
 
   private once(key: string, fn: () => Promise<void>) {

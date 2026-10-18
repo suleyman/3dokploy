@@ -9,8 +9,8 @@
     "node": ">=22.6"
   },
   "scripts": {
-    "dev": "concurrently -k -n relay,web -c cyan,magenta \"npm:dev:relay\" \"npm:dev:web\"",
-    "dev:relay": "node --experimental-strip-types --watch server/index.ts",
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --experimental-strip-types --watch server/index.ts",
     "dev:web": "vite",
     "build": "tsc --noEmit && vite build",
     "start": "node --experimental-strip-types server/index.ts",

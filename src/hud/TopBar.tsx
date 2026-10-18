@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ago, clock } from '../format';
-import { useSession } from '../session';
 import { useStore, type MenuTab } from '../store';
 import { Logo } from './icons';
 import { fullscreenSupported, toggleFullscreen } from './fullscreen';
@@ -166,14 +165,12 @@ function useShortcuts() {
   }, []);
 }
 
-/** LIVE / MOCK badge; opens a small popover to change, drop or make the connection. */
+/** LIVE badge; opens a small popover with the sync state. */
 function SourceBadge() {
-  const kind = useStore((s) => s.sourceKind);
   const status = useStore((s) => s.status);
   const loadError = useStore((s) => s.loadError);
+  const version = useStore((s) => s.version);
   const now = useStore((s) => s.now);
-  const conn = useSession((s) => s.conn);
-  const version = useSession((s) => s.version);
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
 
@@ -184,71 +181,23 @@ function SourceBadge() {
     return () => window.removeEventListener('pointerdown', close, true);
   }, [open]);
 
-  if (kind !== 'mock' && kind !== 'live') return null;
-  const { openConnect, disconnect } = useSession.getState();
-  const state = kind === 'mock' ? 'mock' : loadError ? 'error' : status.state;
-  const label = state === 'mock' ? 'Demo' : state === 'live' ? 'Live' : state === 'connecting' ? 'Syncing' : 'Offline';
+  const state = loadError ? 'error' : status.state;
+  const label = state === 'live' ? 'Live' : state === 'connecting' ? 'Syncing' : 'Offline';
+  const error = state === 'error' ? (loadError ?? status.message) : undefined;
 
   return (
     <span className="badge-wrap" ref={box}>
-      <button
-        type="button"
-        className={`badge ${kind === 'mock' ? 'badge-mock' : `badge-live is-${state}`}`}
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {kind === 'live' && <i className="badge-dot" />}
+      <button type="button" className={`badge badge-live is-${state}`} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <i className="badge-dot" />
         {label}
       </button>
       {open && (
         <span className="badge-pop panel" role="dialog" aria-label="Connection">
-          {kind === 'live' && conn?.managed ? (
-            <>
-              <span className="label">Connected to</span>
-              <b className="mono truncate">{new URL(conn.url).host}</b>
-              <span className="muted small">
-                {version ? `Dokploy ${version}` : 'Dokploy'}
-                {status.syncedAt ? ` · synced ${ago(status.syncedAt, now)}` : ''}
-              </span>
-              {(loadError || status.message) && state === 'error' && <span className="pop-error small">{loadError ?? status.message}</span>}
-              <span className="muted small">Configured on this server: no key is stored in your browser.</span>
-            </>
-          ) : kind === 'live' && conn ? (
-            <>
-              <span className="label">Connected to</span>
-              <b className="mono truncate">{new URL(conn.url).host}</b>
-              <span className="muted small">
-                {version ? `Dokploy ${version}` : 'Dokploy'}
-                {status.syncedAt ? ` · synced ${ago(status.syncedAt, now)}` : ''}
-              </span>
-              {(loadError || status.message) && state === 'error' && <span className="pop-error small">{loadError ?? status.message}</span>}
-              <span className="pop-actions">
-                <button type="button" className="btn" onClick={openConnect}>
-                  Edit connection
-                </button>
-                <button type="button" className="btn btn-danger" onClick={disconnect}>
-                  Disconnect
-                </button>
-              </span>
-              <span className="muted small">Key stored in this browser only.</span>
-            </>
-          ) : (
-            <>
-              <span className="label">Demo data</span>
-              <span className="small">A made-up world. Connect your own Dokploy to see the real thing (read-only).</span>
-              <span className="pop-actions">
-                {conn?.managed ? (
-                  <button type="button" className="btn btn-primary" onClick={() => useSession.setState({ demo: false })}>
-                    Back to {new URL(conn.url).host}
-                  </button>
-                ) : (
-                  <button type="button" className="btn btn-primary" onClick={openConnect}>
-                    Connect Dokploy
-                  </button>
-                )}
-              </span>
-            </>
-          )}
+          <span className="label">Connected to</span>
+          <b className="mono truncate">{version ? `Dokploy ${version}` : 'Dokploy'}</b>
+          <span className="muted small">{status.syncedAt ? `Synced ${ago(status.syncedAt, now)}` : 'Not synced yet'}</span>
+          {error && <span className="pop-error small">{error}</span>}
+          <span className="muted small">Read-only. Configured on this server; the API key never reaches your browser.</span>
         </span>
       )}
     </span>

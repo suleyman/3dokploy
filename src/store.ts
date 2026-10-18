@@ -1,12 +1,11 @@
 /**
  * App state: the world as the data source reports it, plus UI state.
- * There is no simulation here; the mock tick lives in MockSource (data/source.ts → data/sim.ts).
  *
  * Selector rule: select raw slices (records, primitives) and derive with useMemo in components.
  * Returning a fresh array/object from a selector re-renders forever (React error #185).
  */
 import { create } from 'zustand';
-import type { DataSource } from './data/source';
+import { SAMPLE_SECONDS, type DataSource } from './data/source';
 import {
   isActiveDeploy,
   type Alert,
@@ -15,7 +14,6 @@ import {
   type Project,
   type Server,
   type Service,
-  type SourceCapabilities,
   type SourceStatus,
   type World,
   type WorldPatch,
@@ -60,7 +58,6 @@ interface WorldSlice {
   alerts: Rec<Alert>;
 }
 
-const NO_CAPABILITIES: SourceCapabilities = { metrics: false, deployments: false, actions: false, simulation: false, sampleSeconds: 1 };
 const RETRY_MS = 5000;
 const MAX_EVENTS = 80;
 const TREND_LEN = 40;
@@ -71,9 +68,9 @@ export interface State extends WorldSlice {
   /** Bumped every time a source is connected; the scene rebuilds per session. */
   session: number;
   ready: boolean;
-  sourceKind: DataSource['kind'] | null;
-  capabilities: SourceCapabilities;
   status: SourceStatus;
+  /** Dokploy's version (header popover), once known. */
+  version: string | null;
   /** Why the initial load failed (we keep retrying). */
   loadError: string | null;
   layout: Layout | null;
@@ -118,12 +115,8 @@ export interface State extends WorldSlice {
   /** Opens a header dropdown, or closes it when it's already open (null closes any). */
   toggleMenu(tab: MenuTab | null): void;
   cameraCommand(kind: CameraCommand['kind'], extra?: Pick<CameraCommand, 'dx' | 'dz'>): void;
-  redeploy(serviceId: string): void;
-  setRunning(serviceId: string, running: boolean): void;
   fetchLogs(deploymentId: string): Promise<string[]>;
-  cartArrived(deploymentId: string): void;
   cartGone(deploymentId: string): void;
-  techFixed(serviceId: string): void;
 }
 
 let source: DataSource | null = null;
@@ -170,9 +163,8 @@ export const useStore = create<State>()((set, get) => ({
   deployments: {},
   alerts: {},
   ready: false,
-  sourceKind: null,
-  capabilities: NO_CAPABILITIES,
   status: { state: 'connecting' },
+  version: null,
   loadError: null,
   layout: null,
   layoutKey: '',
@@ -202,9 +194,8 @@ export const useStore = create<State>()((set, get) => ({
     // A new source starts from nothing: no leftovers from the previous world.
     set((s) => ({
       session: s.session + 1,
-      sourceKind: src.kind,
-      capabilities: src.capabilities,
       status: { state: 'connecting' },
+      version: null,
       loadError: null,
       ready: false,
       servers: {},
@@ -241,7 +232,7 @@ export const useStore = create<State>()((set, get) => ({
           set({
             ...slice,
             ...withLayout({ layoutKey: '', layout: null }, slice),
-            carts: src.capabilities.deployments ? world.deployments.filter(isActiveDeploy).map((d) => d.id) : [],
+            carts: world.deployments.filter(isActiveDeploy).map((d) => d.id),
             events: seedEvents(slice),
             trends: sampleTrends({ at: [], cpu: [], mem: [], net: [] }, slice.services, 0),
             loadError: null,
@@ -251,6 +242,7 @@ export const useStore = create<State>()((set, get) => ({
             (patch) => set((s) => applyPatch(s, patch)),
             (status) => set({ status }),
           );
+          void src.version().then((version) => !cancelled && set({ version }));
         },
         (err: unknown) => {
           if (cancelled) return;
@@ -329,23 +321,11 @@ export const useStore = create<State>()((set, get) => ({
     set((s) => ({ camera: { kind, n: (s.camera?.n ?? 0) + 1, ...extra } }));
   },
 
-  redeploy(serviceId) {
-    if (get().capabilities.actions) void source?.redeploy(serviceId);
-  },
-  setRunning(serviceId, running) {
-    if (get().capabilities.actions) void source?.setRunning(serviceId, running);
-  },
   fetchLogs(deploymentId) {
-    return source?.logs ? source.logs(deploymentId) : Promise.resolve([]);
-  },
-  cartArrived(deploymentId) {
-    source?.notify?.({ type: 'cart-arrived', deploymentId });
+    return source ? source.logs(deploymentId) : Promise.resolve([]);
   },
   cartGone(deploymentId) {
     set((s) => ({ carts: s.carts.filter((id) => id !== deploymentId) }));
-  },
-  techFixed(serviceId) {
-    source?.notify?.({ type: 'tech-fixed', serviceId });
   },
 }));
 
@@ -363,11 +343,9 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
   // A deployment we have never seen before gets a cart: in flight, or so recently finished that
   // it slipped between two polls (fast deploys). The latter just drive in, drop off and leave.
   const now = Date.now();
-  const fresh = s.capabilities.deployments
-    ? (p.deployments ?? [])
-        .filter((d) => !(d.id in s.deployments) && (isActiveDeploy(d) || now - (d.finishedAt ?? d.createdAt) < RECENT_CART_MS))
-        .map((d) => d.id)
-    : [];
+  const fresh = (p.deployments ?? [])
+    .filter((d) => !(d.id in s.deployments) && (isActiveDeploy(d) || now - (d.finishedAt ?? d.createdAt) < RECENT_CART_MS))
+    .map((d) => d.id);
 
   const out: Partial<State> = { ...slice, ...withLayout(s, slice) };
   if (fresh.length) out.carts = [...s.carts, ...fresh];
@@ -377,7 +355,7 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
 
   const events = diffEvents(s, slice, p);
   if (events.length) out.events = [...events, ...s.events].slice(0, MAX_EVENTS);
-  if (p.services?.length && s.capabilities.metrics) out.trends = sampleTrends(s.trends, slice.services, s.capabilities.sampleSeconds);
+  if (p.services?.length) out.trends = sampleTrends(s.trends, slice.services, SAMPLE_SECONDS);
   return out;
 }
 
@@ -430,7 +408,7 @@ function diffEvents(s: State, next: WorldSlice, p: WorldPatch): ActivityEvent[] 
       if (t) out.push(ev({ at: now, ...t, detail: where(svc.id), serviceId: svc.id }));
     }
     // CPU spikes: once per crossing, at most once a minute per node.
-    if (s.capabilities.metrics && svc.cpu >= CPU_SPIKE && prev.cpu < CPU_SPIKE && now - (spiking.get(svc.id) ?? 0) > 60_000) {
+    if (svc.cpu >= CPU_SPIKE && prev.cpu < CPU_SPIKE && now - (spiking.get(svc.id) ?? 0) > 60_000) {
       spiking.set(svc.id, now);
       out.push(ev({ kind: 'cpu', at: now, tone: 'warn', text: `${svc.name} CPU ${Math.round(svc.cpu * 100)}%`, detail: where(svc.id), serviceId: svc.id }));
     }

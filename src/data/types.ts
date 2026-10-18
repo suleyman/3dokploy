@@ -35,7 +35,7 @@ export interface Service {
   name: string;
   kind: ServiceKind;
   status: ServiceStatus;
-  /** 0..1 of the service's CPU limit. 0 when the source has no metrics. */
+  /** 0..1 of the service's CPU limit. 0 until container stats arrive. */
   cpu: number;
   memMb: number;
   memLimitMb: number;
@@ -49,10 +49,8 @@ export interface Service {
   /** Epoch ms of the last successful deploy. */
   lastDeploy: number | null;
   createdAt?: number;
-  /** Last 30 CPU samples (0..1), oldest first. Empty when the source has no metrics. */
+  /** Last 30 CPU samples (0..1), oldest first. */
   cpuHist: number[];
-  /** Requests per second at the edge; absent for services without HTTP traffic. */
-  rps?: number;
   /** Network throughput in bytes/s (received by / sent from the service's containers). */
   net?: { rxBps: number; txBps: number };
   /** Running containers right now (from container stats). */
@@ -63,7 +61,7 @@ export const STAGES = ['Clone', 'Build', 'Push', 'Start', 'Health'] as const;
 export type StageName = (typeof STAGES)[number];
 export type StageStatus = 'queued' | 'running' | 'done' | 'failed';
 
-export type DeployTrigger = 'push' | 'manual' | 'auto-heal';
+export type DeployTrigger = 'push' | 'manual';
 /** `queued` = accepted, waiting for the build slot (in the scene: cart still en route). */
 export type DeployStatus = 'queued' | 'running' | 'success' | 'failed';
 
@@ -112,29 +110,12 @@ export interface World {
 
 export type Collection = keyof World;
 
-/**
- * Incremental update. Arrays are upserts keyed by `id`; `removed` lists ids to drop.
- * This is also the wire format of the proxy's SSE stream.
- */
+/** Incremental update. Arrays are upserts keyed by `id`; `removed` lists ids to drop. */
 export type WorldPatch = { [K in Collection]?: World[K] } & {
   removed?: Partial<Record<Collection, string[]>>;
 };
 
 export const COLLECTIONS: readonly Collection[] = ['servers', 'projects', 'environments', 'services', 'deployments', 'alerts'];
-
-/** What a source can provide; the UI hides whatever is not backed by data. */
-export interface SourceCapabilities {
-  /** CPU / memory / network per service. */
-  metrics: boolean;
-  /** Deploy history + pipelines + alerts (and deploy carts in the scene). */
-  deployments: boolean;
-  /** Redeploy / start / stop. */
-  actions: boolean;
-  /** Mock world: carts gate the deploy and the technician "fixes" incidents. */
-  simulation: boolean;
-  /** Seconds between two metric samples (for chart axes). */
-  sampleSeconds: number;
-}
 
 export type SourceState = 'connecting' | 'live' | 'error';
 

@@ -1,8 +1,7 @@
-import { useEffect, useMemo } from 'react';
-import { DokploySource, MockSource } from './data/source';
+import { useEffect } from 'react';
+import { DokploySource } from './data/source';
 import { ago } from './format';
 import { Breadcrumb } from './hud/Breadcrumb';
-import { ConnectScreen } from './hud/ConnectScreen';
 import { Inspector } from './hud/Inspector';
 import { Kpis } from './hud/Kpis';
 import { MapControls } from './hud/MapControls';
@@ -11,49 +10,35 @@ import { ProjectPanel } from './hud/ProjectPanel';
 import { Toasts } from './hud/Toasts';
 import { TopBar } from './hud/TopBar';
 import { Scene } from './scene/Scene';
-import { isGated, useSession } from './session';
 import { bindSounds } from './sound';
 import { useStore } from './store';
 
 export function App() {
   const ready = useStore((s) => s.ready);
-  const deployments = useStore((s) => s.capabilities.deployments);
-  const conn = useSession((s) => s.conn);
-  const demo = useSession((s) => s.demo);
-  const gated = useSession(isGated);
 
-  // The user's Dokploy when connected (and not in demo); the demo world otherwise, also behind
-  // the connect screen. Re-editing a connection keeps the current world running underneath.
-  const live = !!conn && !demo;
-  const source = useMemo(() => (live && conn ? new DokploySource(conn) : new MockSource()), [live, conn]);
-
-  useEffect(() => useStore.getState().connect(source), [source]);
+  useEffect(() => useStore.getState().connect(new DokploySource()), []);
   useEffect(() => bindSounds(), []);
 
   return (
-    <div className={`app ${gated ? 'is-gated' : ''}`}>
+    <div className="app">
       <Scene />
-      {gated ? (
-        <ConnectScreen />
-      ) : (
-        <div className="hud">
-          <TopBar />
-          {ready ? (
-            <>
-              <Kpis />
-              <Breadcrumb />
-              <MapControls />
-              <Inspector />
-              <ProjectPanel />
-              {deployments && <Pipeline />}
-              <Toasts />
-              <SyncBanner />
-            </>
-          ) : (
-            <Boot />
-          )}
-        </div>
-      )}
+      <div className="hud">
+        <TopBar />
+        {ready ? (
+          <>
+            <Kpis />
+            <Breadcrumb />
+            <MapControls />
+            <Inspector />
+            <ProjectPanel />
+            <Pipeline />
+            <Toasts />
+            <SyncBanner />
+          </>
+        ) : (
+          <Boot />
+        )}
+      </div>
     </div>
   );
 }
@@ -61,8 +46,6 @@ export function App() {
 /** Before the first snapshot: a spinner, or why it failed and what to do about it. */
 function Boot() {
   const loadError = useStore((s) => s.loadError);
-  const managed = useSession((s) => !!s.conn?.managed);
-  const { openConnect, startDemo } = useSession.getState();
   if (!loadError) {
     return (
       <div className="boot panel">
@@ -76,18 +59,8 @@ function Boot() {
       <strong>Can't load Dokploy data</strong>
       <p className="mono">{loadError}</p>
       <p className="muted small">
-        Retrying every 5 seconds.{managed && ' This server is configured with DOKPLOY_URL / DOKPLOY_API_KEY: check them.'}
+        Retrying every 5 seconds. Check <code>DOKPLOY_URL</code> and <code>DOKPLOY_API_KEY</code> in this server's environment.
       </p>
-      <div className="gate-actions">
-        {!managed && (
-          <button type="button" className="btn" onClick={openConnect}>
-            Edit connection
-          </button>
-        )}
-        <button type="button" className="btn" onClick={startDemo}>
-          Show the demo
-        </button>
-      </div>
     </div>
   );
 }
