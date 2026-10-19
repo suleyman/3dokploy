@@ -6,6 +6,7 @@
   "logo": "3dokploy.svg",
   "links": {
     "github": "https://github.com/suleyman/3dokploy",
+    "website": "",
     "docs": "https://github.com/suleyman/3dokploy#readme"
   },
   "tags": ["monitoring", "dashboard", "devops"]
