@@ -13,7 +13,7 @@
  * publishes only what changed.
  */
 import { diffWorld } from '../diff';
-import type { Alert, Deployment, Server, Service, ServiceStatus, SourceStatus, World } from '../types';
+import type { Alert, Deployment, Server, Service, ServiceKind, ServiceStatus, SourceStatus, World } from '../types';
 import {
   UpstreamError,
   belongsTo,
@@ -75,6 +75,17 @@ const hostOf = (url: string) => {
     return null;
   }
 };
+/** Hosts whose first label is the service's name, digits aside ("maklerfotos24.de" for "maklerfotos"). */
+export function guessDomains(service: string, hosts: string[]): string[] {
+  const name = service.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (name.length < 4) return [];
+  return hosts.filter((h) => {
+    const label = h.toLowerCase().replace(/^www\./, '').split('.')[0].replace(/[^a-z0-9]/g, '');
+    const bare = label.replace(/\d+$/, '');
+    return bare.length >= 4 && (label === name || bare === name || bare === name.replace(/\d+$/, ''));
+  });
+}
+
 /** "www.example.com" and "example.com" are the same site for visitor counts. */
 const bareHost = (h: string) => h.toLowerCase().replace(/^www\./, '');
 
@@ -91,6 +102,22 @@ const HELPER = /(^|[-_.])(db|postgres|mysql|mariadb|mongo|redis|valkey|broker|ba
 const INTERNET = /(^|[-_.])(vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
 const rank = (key: string) => (MAIN.test(key) ? 0 : HELPER.test(key) ? 2 : 1);
 const byRole = (a: string, b: string) => rank(a) - rank(b) || a.localeCompare(b);
+
+/**
+ * A database container inside a compose stack gets the database look, like a Dokploy database
+ * service. Docker only tells us the name here, so this goes by the usual names.
+ */
+export function dbKind(key: string): ServiceKind | undefined {
+  const k = key.toLowerCase();
+  const has = (word: string) => new RegExp(`(^|[-_.])${word}([-_.\\d]|$)`).test(k);
+  if (has('mongo') || has('mongodb')) return 'mongo';
+  if (has('mariadb')) return 'mariadb';
+  if (has('mysql')) return 'mysql';
+  if (has('redis') || has('valkey') || has('keydb') || has('broker')) return 'redis';
+  if (has('libsql') || has('sqld')) return 'libsql';
+  if (has('db') || has('postgres') || has('postgresql') || has('pg') || has('database')) return 'postgres';
+  return undefined;
+}
 
 /** A container's node status; a deploy in progress wins while the container itself is fine. */
 function containerStatus(c: ComposeContainer, service: ServiceStatus): ServiceStatus {
@@ -317,8 +344,19 @@ export class Collector {
     );
   }
 
+  /** Hosts Kuma watches or Umami counts: real public sites, also those Dokploy doesn't route. */
+  private publicHosts() {
+    const hosts = new Set<string>();
+    for (const m of this.kuma?.monitors ?? []) {
+      const h = m.url ? hostOf(m.url) : null;
+      if (h) hosts.add(h);
+    }
+    for (const site of this.extras.umami?.sites ?? []) hosts.add(site.domain.toLowerCase());
+    return [...hosts];
+  }
+
   private async refreshCerts() {
-    const hosts = [...new Set([...this.details.values()].flatMap((d) => d.domains))];
+    const hosts = [...new Set([...[...this.details.values()].flatMap((d) => d.domains), ...this.publicHosts()])].filter((h) => !/^(\d+\.){3}\d+(:\d+)?$|:/.test(h));
     if (!hosts.length) return;
     try {
       const { certs } = await fetchCerts(this.t, hosts);
@@ -445,10 +483,12 @@ export class Collector {
     const kumaDown = this.kumaDown();
     const latency = this.kumaLatency();
     const visitors = new Map((this.extras.umami?.sites ?? []).map((x) => [bareHost(x.domain), x.visitors]));
+    const sites = this.publicHosts();
     const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
-      const domains = det?.domains ?? [];
+      // Domains routed outside Dokploy (e.g. a Traefik file config) are unknown to it: guess by name.
+      const domains = det?.domains.length ? det.domains : guessDomains(svc.name, sites);
       // A Kuma monitor on one of the service's domains is down: Docker may say "running", users don't.
       const failing = svc.status === 'deploying' ? [] : domains.flatMap((d) => kumaDown.get(d) ?? []);
       const ms = domains.map((d) => latency.get(d)).filter((x): x is number => x !== undefined);
@@ -495,6 +535,7 @@ export class Collector {
           name: containerLabel(key, svc.appName ?? ''),
           description: `${svc.name} · container ${key}`,
           container: key,
+          kind: (i > 0 && dbKind(key)) || node.kind,
           domain: i === 0 ? node.domain : undefined,
           // the site's numbers belong to the app, not to its database
           latencyMs: i === 0 ? node.latencyMs : undefined,
