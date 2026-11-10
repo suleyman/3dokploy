@@ -229,10 +229,15 @@ export class Collector {
 
   private async refreshContainers() {
     const stacks = (this.structure?.services ?? []).filter((s) => s.kind === 'compose' && s.appName);
-    await mapLimit(stacks, 4, async (svc) => {
+    // One call per stack: stop at the first failure (e.g. a proxy answering 404 while 3Dokploy
+    // itself redeploys), so a burst of errors can't get the viewer banned by fail2ban/CrowdSec.
+    let failed = false;
+    await mapLimit(stacks, 2, async (svc) => {
+      if (failed) return;
       try {
         this.composeContainers.set(svc.id, await fetchComposeContainers(this.t, svc.appName!));
       } catch (e) {
+        failed = true;
         this.warn('containers', e);
       }
     });
