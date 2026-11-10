@@ -10,6 +10,7 @@ import { STAGES } from '../data/types';
 import { cartRoute, routeBetween, routeFromHome, routeHome, type Layout, type V3 } from '../layout';
 import { useStore } from '../store';
 import { Label } from './Label';
+import { trouble } from './Rack';
 
 const CART_SPEED = 3.2;
 const TECH_SPEED = 2.3;
@@ -76,15 +77,48 @@ function dampAngle(current: number, target: number, lambda: number, dt: number) 
  */
 export function Agents({ layout }: { layout: Layout }) {
   const carts = useStore((s) => s.carts);
+  const crew = useCrewSize();
   return (
     <>
       {carts.map((id) => (
         <Cart key={id} deploymentId={id} layout={layout} />
       ))}
-      <Technician layout={layout} />
-      <HomeMarker at={layout.home} />
+      {Array.from({ length: crew }, (_, i) => (
+        <Technician key={i} layout={layout} index={i} crew={crew} />
+      ))}
+      {Array.from({ length: crew }, (_, i) => (
+        <HomeMarker key={i} at={homeOf(layout, i)} />
+      ))}
     </>
   );
+}
+
+const MAX_CREW = 5;
+const CREW_COOLDOWN_MS = 30_000;
+/** Walking lanes, all inside the 1.5 m door, so technicians don't walk on top of each other. */
+const LANES = [TECH_DX, -TECH_DX, 0.2, -0.2, 0.62];
+const homeOf = (layout: Layout, i: number): V3 => [layout.home[0] + i * 0.6, 0, layout.home[2]];
+
+/** 1 technician, +1 per open incident, +1 per two racks under load; shrinks only after a quiet spell. */
+function useCrewSize() {
+  const services = useStore((s) => s.services);
+  const alerts = useStore((s) => s.alerts);
+  const wanted = useMemo(() => {
+    const incidents = new Set(
+      Object.values(alerts)
+        .filter((a) => !a.resolvedAt && a.severity === 'critical' && services[a.serviceId]?.status === 'error')
+        .map((a) => a.serviceId),
+    ).size;
+    const loaded = Object.values(services).filter((s) => s.status !== 'error' && trouble(s)).length;
+    return Math.min(MAX_CREW, 1 + incidents + Math.floor(loaded / 2));
+  }, [services, alerts]);
+  const [crew, setCrew] = useState(wanted);
+  useEffect(() => {
+    if (wanted >= crew) return setCrew(wanted);
+    const t = setTimeout(() => setCrew(wanted), CREW_COOLDOWN_MS);
+    return () => clearTimeout(t);
+  }, [wanted, crew]);
+  return crew;
 }
 
 type CartPhase = 'out' | 'docked' | 'back';
@@ -224,6 +258,12 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
 
 type TechPhase = 'idle' | 'walk' | 'work' | 'home' | 'patrol' | 'inspect';
 
+/** Swaps the shared waiting spot at a route's start/end for this technician's own spot. */
+function fromHomeTo(route: V3[] | null, home: V3, end: 'start' | 'end'): V3[] | null {
+  if (!route) return null;
+  return end === 'start' ? [home, ...route.slice(1)] : [...route.slice(0, -1), home];
+}
+
 const PATROL_ROUNDS = 5; // racks checked before a break at home
 const REST_S = 8;
 
@@ -237,7 +277,9 @@ function pickPatrol(services: Record<string, { cpu: number; status: string }>, s
   return ids[ids.length - 1];
 }
 
-function Technician({ layout }: { layout: Layout }) {
+function Technician({ layout, index, crew }: { layout: Layout; index: number; crew: number }) {
+  const lane = LANES[index % LANES.length];
+  const home = homeOf(layout, index);
   const alerts = useStore((s) => s.alerts);
   const services = useStore((s) => s.services);
   const still = useStore((s) => s.reducedMotion);
@@ -248,8 +290,10 @@ function Technician({ layout }: { layout: Layout }) {
       .filter((a) => !a.resolvedAt && a.severity === 'critical' && services[a.serviceId]?.status === 'error')
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((a) => a.serviceId);
-    return [...new Set(ids)].filter((id) => layout.slots[id]);
-  }, [alerts, services, layout]);
+    const all = [...new Set(ids)].filter((id) => layout.slots[id]);
+    const mine = all.filter((_, k) => k % crew === index);
+    return mine.length ? mine : all.slice(index, index + 1);
+  }, [alerts, services, layout, index, crew]);
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const servicesRef = useRef(services);
@@ -263,10 +307,20 @@ function Technician({ layout }: { layout: Layout }) {
     target: null as string | null,
     at: null as string | null,
     t: 0,
-    restUntil: 3,
+    restUntil: 3 + index * 2.5, // the crew heads out one after another
     inspectUntil: 0,
     rounds: 0,
   });
+
+  // The layout changed (nodes came or went, buildings resized): a route planned on the old one would
+  // cut through the new walls. Start over from the waiting spot.
+  useEffect(() => {
+    const st = sim.current;
+    if (st.phase === 'idle' && !st.walker) return;
+    Object.assign(st, { phase: 'idle', walker: null, target: null, at: null, restUntil: st.t + 1 + index });
+    setMode('idle');
+    setChecking(null);
+  }, [layout, index]);
 
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
@@ -293,8 +347,8 @@ function Technician({ layout }: { layout: Layout }) {
     const next = () => {
       const from = st.at!;
       const job = queueRef.current.find((id) => id !== from);
-      if (!(job && go('walk', routeBetween(layout, from, job, TECH_DX), job))) {
-        go('home', routeHome(layout, from, TECH_DX), null);
+      if (!(job && go('walk', routeBetween(layout, from, job, lane), job))) {
+        go('home', fromHomeTo(routeHome(layout, from, lane), home, 'end'), null);
       }
     };
     // Incidents first; otherwise carry on with the round or head home for a break.
@@ -303,19 +357,19 @@ function Technician({ layout }: { layout: Layout }) {
       const from = st.at!;
       if (queueRef.current.length || still) return next();
       const target = st.rounds < PATROL_ROUNDS ? pickPatrol(servicesRef.current, layout.slots, from) : null;
-      if (!(target && go('patrol', routeBetween(layout, from, target, TECH_DX), target))) {
-        go('home', routeHome(layout, from, TECH_DX), null);
+      if (!(target && go('patrol', routeBetween(layout, from, target, lane), target))) {
+        go('home', fromHomeTo(routeHome(layout, from, lane), home, 'end'), null);
       }
     };
 
     switch (st.phase) {
       case 'idle': {
         const job = queueRef.current[0];
-        if (job) go('walk', routeFromHome(layout, job, TECH_DX), job);
+        if (job) go('walk', fromHomeTo(routeFromHome(layout, job, lane), home, 'start'), job);
         else if (!still && st.t >= st.restUntil) {
           const target = pickPatrol(servicesRef.current, layout.slots, null);
           st.rounds = 0;
-          if (target) go('patrol', routeFromHome(layout, target, TECH_DX), target);
+          if (target) go('patrol', fromHomeTo(routeFromHome(layout, target, lane), home, 'start'), target);
         }
         break;
       }
@@ -362,7 +416,7 @@ function Technician({ layout }: { layout: Layout }) {
     const walking = st.phase === 'walk' || st.phase === 'home' || st.phase === 'patrol';
     const busy = st.phase === 'work' || st.phase === 'inspect';
     if (st.walker) g.position.copy(st.walker.pos);
-    else g.position.set(...layout.home);
+    else g.position.set(...home);
     const heading = busy ? FACE_RACK : st.walker ? st.walker.heading : 0;
     g.rotation.y = dampAngle(g.rotation.y, heading, 10, dt);
 
@@ -386,7 +440,7 @@ function Technician({ layout }: { layout: Layout }) {
   });
 
   return (
-    <group ref={root} position={layout.home}>
+    <group ref={root} position={home}>
       <group ref={body}>
         <TechModel legL={legL} legR={legR} armL={armL} armR={armR} />
       </group>

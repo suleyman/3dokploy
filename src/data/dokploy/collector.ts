@@ -60,6 +60,8 @@ export type Publish = (event: 'patch' | 'status', data: unknown) => void;
 const milli = (v: number) => Math.round(v * 1000) / 1000;
 /** How far back a network rate may look for a counter change (see netRate). */
 const NET_WINDOW_MS = 5 * 60_000;
+/** How long a container that disappeared keeps its node (shown idle). */
+const GRACE_MS = 60_000;
 
 type NetSample = { at: number; rx: number; tx: number };
 
@@ -79,6 +81,7 @@ const byRole = (a: string, b: string) => rank(a) - rank(b) || a.localeCompare(b)
 
 /** A container's node status; a deploy in progress wins while the container itself is fine. */
 function containerStatus(c: ComposeContainer, service: ServiceStatus): ServiceStatus {
+  if (service === 'error') return 'error'; // e.g. a Kuma monitor is down although the container runs
   if (c.state === 'restarting' || c.state === 'dead' || /unhealthy/i.test(c.status)) return 'error';
   if (c.state !== 'running') return 'idle';
   return service === 'deploying' ? 'deploying' : 'running';
@@ -115,6 +118,8 @@ export class Collector {
   /** Container keys per service id (main container first, then by name, so node order is stable). */
   private containerKeys = new Map<string, string[]>();
   private kuma: KumaState | null = null;
+  /** Last time each container node was seen, so a container missing for a moment keeps its rack. */
+  private seen = new Map<string, number>();
   /** Compose stacks' containers by service id, from Dokploy's label match. */
   private composeContainers = new Map<string, ComposeContainer[]>();
   private netHistory = new Map<string, NetSample[]>();
@@ -289,7 +294,13 @@ export class Collector {
       const names = new Set(listed?.map((c) => c.name));
       const own = stats.filter((c) => names.has(c.name) || belongsTo(c.name, svc.appName!));
       this.measure(svc.id, own, now);
-      const keys = (listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))]).sort(byRole);
+      const current = listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))];
+      for (const key of current) this.seen.set(containerNodeId(svc.id, key), now);
+      // Keep containers seen in the last minute (a redeploy recreates them), so buildings don't jump.
+      const recent = (this.containerKeys.get(svc.id) ?? []).filter(
+        (k) => !current.includes(k) && now - (this.seen.get(containerNodeId(svc.id, k)) ?? 0) < GRACE_MS,
+      );
+      const keys = [...current, ...recent].sort(byRole);
       this.containerKeys.set(svc.id, keys);
       for (const key of keys) this.measure(containerNodeId(svc.id, key), own.filter((c) => containerKey(c.name) === key), now);
     }
@@ -389,7 +400,13 @@ export class Collector {
       return keys.map((key, i) => {
         const cm = this.metrics.get(containerNodeId(svc.id, key));
         const c = listed.get(key);
-        const status = c ? containerStatus(c, i === 0 ? node.status : svc.status) : node.status;
+        const status = c
+          ? containerStatus(c, i === 0 ? node.status : svc.status)
+          : listed.size
+            ? i === 0 && node.status === 'error'
+              ? 'error'
+              : 'idle' // gone for the moment (within the grace period)
+            : node.status;
         return {
           ...node,
           status,
