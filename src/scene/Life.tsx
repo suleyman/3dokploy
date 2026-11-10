@@ -22,6 +22,11 @@ import { TechModel, Walker, dampAngle } from './Agents';
 const VISITOR_CAP = 48;
 const PER_SITE = 6;
 const WALK = 1.7;
+/** Visitors are people at 85% of the technician's size. */
+const SIZE = 0.85;
+const SHIRTS = ['#4f8bff', '#ff5fa2', '#2bd98a', '#ffb547', '#c86bff', '#e8ecf1', '#ff7a45', '#1fd1c1'];
+const SKINS = ['#f1c7a3', '#e0ac85', '#c68863', '#8d5a3b', '#f5d6bc'];
+const PANTS = ['#2b3a55', '#1d2433', '#3d3a4f', '#24303f'];
 
 interface Walk {
   path: THREE.Vector3[];
@@ -36,72 +41,144 @@ function walkOf(points: V3[]): Walk {
   return { path, len, d: 0 };
 }
 
+/** Position at distance d along the walk; returns the heading of that segment. */
 function pointAt(w: Walk, d: number, out: THREE.Vector3) {
   let i = 1;
   while (i < w.len.length - 1 && w.len[i] < d) i++;
+  const a = w.path[i - 1];
+  const b = w.path[i];
   const seg = w.len[i] - w.len[i - 1] || 1;
-  return out.lerpVectors(w.path[i - 1], w.path[i], Math.min(1, Math.max(0, (d - w.len[i - 1]) / seg)));
+  out.lerpVectors(a, b, Math.min(1, Math.max(0, (d - w.len[i - 1]) / seg)));
+  return Math.atan2(b.x - a.x, b.z - a.z);
 }
 
-/** One small figure per active visitor (capped), walking gate → their site's rack, then again. */
+interface Visitor {
+  id: string;
+  w: Walk;
+  delay: number;
+  phase: number;
+  shirt: THREE.Color;
+  skin: THREE.Color;
+  pants: THREE.Color;
+}
+
+const pick = <T,>(xs: readonly T[]) => xs[Math.floor(Math.random() * xs.length)];
+
+// Parts of one figure, in its own space (feet at 0, facing +z), at full technician scale.
+const LEG = { r: 0.06, len: 0.28, hipY: 0.44, x: 0.07 };
+const ARM = { r: 0.045, len: 0.24, shoulderY: 0.82, x: 0.18 };
+const BODY_Y = 0.64;
+const HEAD_Y = 0.98;
+
+/** One small person per active visitor (capped), walking gate → their site's rack, then again. */
 export function Visitors({ layout }: { layout: Layout }) {
   const services = useStore((s) => s.services);
   const still = useStore((s) => s.reducedMotion);
-  const mesh = useRef<THREE.InstancedMesh>(null);
-  const walkers = useRef<{ id: string; w: Walk; delay: number }[]>([]);
-  const tmp = useMemo(() => ({ v: new THREE.Vector3(), m: new THREE.Matrix4() }), []);
+  const legs = useRef<THREE.InstancedMesh>(null);
+  const arms = useRef<THREE.InstancedMesh>(null);
+  const bodies = useRef<THREE.InstancedMesh>(null);
+  const heads = useRef<THREE.InstancedMesh>(null);
+  const visitors = useRef<Visitor[]>([]);
+  const tmp = useMemo(
+    () => ({ v: new THREE.Vector3(), base: new THREE.Matrix4(), part: new THREE.Matrix4(), m: new THREE.Matrix4(), r: new THREE.Matrix4(), s: new THREE.Matrix4().makeScale(SIZE, SIZE, SIZE) }),
+    [],
+  );
 
-  // "id:count" pairs: only re-plan walkers when the crowd changes, not on every stats tick.
+  // "id:count" pairs: only re-plan when the crowd changes, not on every stats tick.
   const crowd = Object.values(services)
     .filter((s) => s.visitors && layout.slots[s.id])
     .map((s) => `${s.id}:${Math.min(PER_SITE, s.visitors!)}`)
     .join('|');
 
   useEffect(() => {
-    const next: typeof walkers.current = [];
+    const next: Visitor[] = [];
     for (const pair of crowd ? crowd.split('|') : []) {
       const [id, n] = pair.split(':');
       const route = routeFromGate(layout, id);
       if (!route) continue;
       for (let k = 0; k < Number(n) && next.length < VISITOR_CAP; k++) {
-        const w = walkOf([...route.map(([x, , z]) => [x + (Math.random() - 0.5) * 0.5, 0, z] as V3)]);
+        const side = (Math.random() - 0.5) * 0.5;
+        const w = walkOf(route.map(([x, , z]) => [x + side, 0, z] as V3));
         w.d = Math.random() * w.len[w.len.length - 1]; // spread along the way
-        next.push({ id, w, delay: 0 });
+        next.push({ id, w, delay: 0, phase: Math.random() * Math.PI * 2, shirt: new THREE.Color(pick(SHIRTS)), skin: new THREE.Color(pick(SKINS)), pants: new THREE.Color(pick(PANTS)) });
       }
     }
-    walkers.current = next;
+    visitors.current = next;
   }, [crowd, layout]);
 
-  useFrame((_, rawDt) => {
-    const m = mesh.current;
-    if (!m) return;
+  useFrame(({ clock }, rawDt) => {
+    const [L, A, B, H] = [legs.current, arms.current, bodies.current, heads.current];
+    if (!L || !A || !B || !H) return;
     const dt = Math.min(rawDt, 0.1);
+    const t = clock.elapsedTime;
     let n = 0;
-    for (const v of walkers.current) {
+    for (const v of visitors.current) {
       if (v.delay > 0) {
         v.delay -= dt;
         continue;
       }
       if (!still) v.w.d += WALK * dt;
-      const total = v.w.len[v.w.len.length - 1];
-      if (v.w.d >= total) {
+      if (v.w.d >= v.w.len[v.w.len.length - 1]) {
         v.w.d = 0;
         v.delay = 1 + Math.random() * 3; // reached the rack: the next one comes in a moment
         continue;
       }
-      pointAt(v.w, v.w.d, tmp.v);
-      tmp.m.makeTranslation(tmp.v.x, 0.22 + (still ? 0 : Math.abs(Math.sin(v.w.d * 6)) * 0.03), tmp.v.z);
-      m.setMatrixAt(n++, tmp.m);
+      const heading = pointAt(v.w, v.w.d, tmp.v);
+      const swing = still ? 0 : Math.sin(t * 9 + v.phase) * 0.55;
+      const bob = still ? 0 : Math.abs(Math.sin(t * 9 + v.phase)) * 0.025;
+      tmp.base.makeTranslation(tmp.v.x, bob, tmp.v.z).multiply(tmp.r.makeRotationY(heading)).multiply(tmp.s);
+
+      // legs and arms swing from hip / shoulder, opposite to each other
+      for (const [k, side] of [
+        [0, -1],
+        [1, 1],
+      ] as const) {
+        const leg = tmp.part
+          .makeTranslation(side * LEG.x, LEG.hipY, 0)
+          .multiply(tmp.r.makeRotationX(side * swing))
+          .multiply(tmp.m.makeTranslation(0, -LEG.len / 2 - LEG.r, 0));
+        L.setMatrixAt(n * 2 + k, tmp.m.copy(tmp.base).multiply(leg));
+        L.setColorAt(n * 2 + k, v.pants);
+        const arm = tmp.part
+          .makeTranslation(side * ARM.x, ARM.shoulderY, 0)
+          .multiply(tmp.r.makeRotationX(-side * swing * 0.8))
+          .multiply(tmp.m.makeTranslation(0, -ARM.len / 2 - ARM.r, 0));
+        A.setMatrixAt(n * 2 + k, tmp.m.copy(tmp.base).multiply(arm));
+        A.setColorAt(n * 2 + k, v.shirt);
+      }
+      B.setMatrixAt(n, tmp.m.copy(tmp.base).multiply(tmp.part.makeTranslation(0, BODY_Y, 0)));
+      B.setColorAt(n, v.shirt);
+      H.setMatrixAt(n, tmp.m.copy(tmp.base).multiply(tmp.part.makeTranslation(0, HEAD_Y, 0)));
+      H.setColorAt(n, v.skin);
+      n++;
     }
-    m.count = n;
-    m.instanceMatrix.needsUpdate = true;
+    L.count = A.count = n * 2;
+    B.count = H.count = n;
+    for (const mesh of [L, A, B, H]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   });
 
   return (
-    <instancedMesh ref={mesh} args={[undefined, undefined, VISITOR_CAP]} frustumCulled={false}>
-      <capsuleGeometry args={[0.07, 0.22, 4, 8]} />
-      <meshStandardMaterial color="#f4f1ea" emissive="#fff4d6" emissiveIntensity={0.6} roughness={0.6} />
-    </instancedMesh>
+    <>
+      <instancedMesh ref={legs} args={[undefined, undefined, VISITOR_CAP * 2]} frustumCulled={false} castShadow>
+        <capsuleGeometry args={[LEG.r, LEG.len, 4, 8]} />
+        <meshStandardMaterial roughness={0.7} />
+      </instancedMesh>
+      <instancedMesh ref={arms} args={[undefined, undefined, VISITOR_CAP * 2]} frustumCulled={false}>
+        <capsuleGeometry args={[ARM.r, ARM.len, 4, 8]} />
+        <meshStandardMaterial roughness={0.6} />
+      </instancedMesh>
+      <instancedMesh ref={bodies} args={[undefined, undefined, VISITOR_CAP]} frustumCulled={false} castShadow>
+        <capsuleGeometry args={[0.14, 0.22, 4, 12]} />
+        <meshStandardMaterial roughness={0.6} />
+      </instancedMesh>
+      <instancedMesh ref={heads} args={[undefined, undefined, VISITOR_CAP]} frustumCulled={false} castShadow>
+        <sphereGeometry args={[0.11, 14, 10]} />
+        <meshStandardMaterial roughness={0.8} />
+      </instancedMesh>
+    </>
   );
 }
 
