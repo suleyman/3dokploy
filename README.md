@@ -59,6 +59,8 @@ build type and port **3000**, set the variables below, then add a domain.
 | `DOKPLOY_API_KEY` | *required* | A Dokploy API key. Only the server uses it. |
 | `BASIC_AUTH` | – | `user:password` login for the page. Set it whenever others can reach the address. |
 | `PORT` | `3000` | Port the server listens on |
+| `KUMA_URL` | – | Optional [Uptime Kuma](https://github.com/louislam/uptime-kuma), e.g. `http://host.docker.internal:3001` |
+| `KUMA_API_KEY` | – | Kuma API key (Settings → API Keys). With both set, a monitor that is down on one of a service's domains puts that node in error. |
 
 Without `BASIC_AUTH`, **anyone who can open the page sees your Dokploy** (read-only, secrets
 stripped). Put it behind HTTPS if it's reachable from the internet.
@@ -94,6 +96,12 @@ browser ──/api/project.all──▶ 3Dokploy server ──x-api-key──▶
 - **Secrets are stripped** from responses before they reach the browser: env vars, passwords,
   tokens, build secrets (3Dokploy never needs them).
 - No database, no sessions, nothing stored. Same-origin only, with a strict Content-Security-Policy.
+- A compose stack is drawn as one rack per container. Helper containers (database, cache,
+  broker, backup) get their traffic from their app's rack; everything else enters at the
+  Traefik gate.
+- Racks smoke under sustained load and burn when a container is down or unhealthy, or when an
+  Uptime Kuma monitor on the service's domain fails (`/api/kuma`, optional). The technician crew
+  grows with incidents and load, and patrols when all is quiet.
 
 ## Development
 
