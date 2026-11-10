@@ -124,6 +124,11 @@ export interface State extends WorldSlice {
   prefsShared: boolean | null;
   /** Nodes being wheeled to another project's building (hidden at their new spot until they arrive). */
   moving: Rec<true>;
+  /**
+   * Racks on their way to another project: a ghost of each stays at its old place (in a ghost of
+   * its building when the project was dissolved) until a mover has wheeled it to its new slot.
+   */
+  transit: Transit | null;
 
   connect(source: DataSource): () => void;
   select(id: string | null): void;
@@ -147,6 +152,10 @@ export interface State extends WorldSlice {
   renameComplex(complexId: string, name: string): void;
   removeComplex(complexId: string): void;
   setMoving(id: string, on: boolean): void;
+  /** A mover loaded the ghost onto the hand truck. */
+  pickUp(ghostId: string): void;
+  /** A mover set the rack down at its new slot; the last one lets the map settle. */
+  finishMove(ghostId: string): void;
   /** Opens a header dropdown, or closes it when it's already open (null closes any). */
   toggleMenu(tab: MenuTab | null): void;
   cameraCommand(kind: CameraCommand['kind'], extra?: Pick<CameraCommand, 'dx' | 'dz'>): void;
@@ -169,11 +178,102 @@ function merge<T extends { id: string }>(rec: Rec<T>, upserts?: T[], removed?: s
   return next;
 }
 
-function withLayout(s: Pick<State, 'layoutKey' | 'layout'>, w: WorldSlice, prefs: MapPrefs): Pick<State, 'layoutKey' | 'layout'> {
+export interface Transit {
+  ghosts: Service[];
+  /** Ghosts of dissolved projects / removed environments, so the old building still stands. */
+  projects: Project[];
+  environments: Environment[];
+  /** ghost id → the node at its new place */
+  targets: Rec<string>;
+  done: Rec<true>;
+  startedAt: number;
+}
+
+/** Recently removed nodes by container name: a recreated service in another project is a move. */
+const graveyard = new Map<string, { node: Service; project?: Project; env?: Environment; at: number }>();
+const GRAVE_MS = 10 * 60_000;
+const containerKey = (svc: Service) => (svc.container ? `c:${svc.container}` : null);
+
+/**
+ * Finds racks that changed project since the last patch: the same node id in another project, or
+ * the same container name reappearing elsewhere (the service was recreated). Returns the transit
+ * to add, or null.
+ */
+function detectMoves(s: State, slice: WorldSlice, p: WorldPatch): Transit | null {
+  const now = Date.now();
+  for (const [k, g] of graveyard) if (now - g.at > GRAVE_MS) graveyard.delete(k);
+  const moves: { from: { node: Service; project?: Project; env?: Environment }; to: Service }[] = [];
+  const byKey = new Map(Object.values(slice.services).flatMap((x) => (containerKey(x) ? [[containerKey(x)!, x] as const] : [])));
+
+  for (const id of p.removed?.services ?? []) {
+    const old = s.services[id];
+    const key = old && containerKey(old);
+    if (!old || !key) continue;
+    const snap = { node: old, project: s.projects[old.projectId], env: s.environments[old.environmentId], at: now };
+    const now_ = byKey.get(key);
+    if (now_ && now_.projectId !== old.projectId && now_.id !== id) moves.push({ from: snap, to: now_ });
+    else graveyard.set(key, snap);
+  }
+  for (const svc of p.services ?? []) {
+    const prev = s.services[svc.id];
+    const key = containerKey(svc);
+    if (prev && prev.projectId !== svc.projectId) {
+      moves.push({ from: { node: prev, project: s.projects[prev.projectId], env: s.environments[prev.environmentId] }, to: svc });
+    } else if (key && (!prev || !containerKey(prev))) {
+      const g = graveyard.get(key);
+      if (g && g.node.projectId !== svc.projectId) moves.push({ from: g, to: svc });
+      if (g) graveyard.delete(key);
+    }
+  }
+  if (!moves.length) return null;
+
+  const t: Transit = { ghosts: [], projects: [], environments: [], targets: {}, done: {}, startedAt: now };
+  for (const { from, to } of moves) {
+    if (moves.filter((m) => m.to.id === to.id).length > 1 && moves.find((m) => m.to.id === to.id)!.from !== from) continue;
+    let projectId = from.node.projectId;
+    let environmentId = from.node.environmentId;
+    if (!slice.projects[projectId]) {
+      // dissolved project: keep a ghost of its building until the last rack has left
+      const gp = `ghostp:${projectId}`;
+      if (!t.projects.some((x) => x.id === gp))
+        t.projects.push({ ...(from.project ?? { color: '#5b6577', name: 'Project' }), id: gp, name: `${from.project?.name ?? 'Project'} (dissolved)` } as Project);
+      projectId = gp;
+    }
+    if (!slice.environments[environmentId] || projectId !== from.node.projectId) {
+      const ge = `ghoste:${environmentId}`;
+      if (!t.environments.some((x) => x.id === ge)) t.environments.push({ ...(from.env ?? { name: 'production' }), id: ge, projectId } as Environment);
+      environmentId = ge;
+    }
+    const ghost: Service = { ...from.node, id: `ghost:${from.node.id}`, projectId, environmentId, peerId: undefined };
+    t.ghosts.push(ghost);
+    t.targets[ghost.id] = to.id;
+  }
+  return t.ghosts.length ? t : null;
+}
+
+function mergeTransit(a: Transit | null, b: Transit): Transit {
+  if (!a) return b;
+  const fresh = b.ghosts.filter((g) => !a.ghosts.some((x) => x.id === g.id));
+  return {
+    ghosts: [...a.ghosts, ...fresh],
+    projects: [...a.projects, ...b.projects.filter((x) => !a.projects.some((y) => y.id === x.id))],
+    environments: [...a.environments, ...b.environments.filter((x) => !a.environments.some((y) => y.id === x.id))],
+    targets: { ...a.targets, ...Object.fromEntries(fresh.map((g) => [g.id, b.targets[g.id]])) },
+    done: a.done,
+    startedAt: a.startedAt,
+  };
+}
+
+function withLayout(
+  s: Pick<State, 'layoutKey' | 'layout'> & { transit?: Transit | null },
+  w: WorldSlice,
+  prefs: MapPrefs,
+  transit: Transit | null = s.transit ?? null,
+): Pick<State, 'layoutKey' | 'layout'> {
   const structure = {
-    projects: Object.values(w.projects),
-    environments: Object.values(w.environments),
-    services: Object.values(w.services),
+    projects: [...Object.values(w.projects), ...(transit?.projects ?? [])],
+    environments: [...Object.values(w.environments), ...(transit?.environments ?? [])],
+    services: [...Object.values(w.services), ...(transit?.ghosts ?? [])],
   };
   const key = structureKey(structure, prefs);
   return key === s.layoutKey ? { layoutKey: s.layoutKey, layout: s.layout } : { layoutKey: key, layout: computeLayout(structure, prefs) };
@@ -269,6 +369,7 @@ export const useStore = create<State>()((set, get) => ({
   prefs: EMPTY_PREFS,
   prefsShared: null,
   moving: {},
+  transit: null,
   menu: null,
   seenEventsAt: Date.now(),
   camera: null,
@@ -448,6 +549,22 @@ export const useStore = create<State>()((set, get) => ({
   removeComplex(complexId) {
     updatePrefs((p) => ({ ...p, groups: p.groups.filter((g) => g.id !== complexId) }));
   },
+  pickUp(ghostId) {
+    set((s) => ({ moving: { ...s.moving, [ghostId]: true } }));
+  },
+  finishMove(ghostId) {
+    set((s) => {
+      const t = s.transit;
+      if (!t || t.done[ghostId]) return {};
+      const moving = { ...s.moving };
+      delete moving[t.targets[ghostId]];
+      const done = { ...t.done, [ghostId]: true as const };
+      if (Object.keys(done).length < t.ghosts.length) return { moving, transit: { ...t, done } };
+      // everyone has arrived: drop the ghosts and let the map settle in one step
+      for (const g of t.ghosts) delete moving[g.id];
+      return { moving, transit: null, ...withLayout(s, s, s.prefs, null) };
+    });
+  },
   setMoving(id, on) {
     set((s) => {
       const moving = { ...s.moving };
@@ -502,14 +619,30 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
     .filter((d) => !(d.id in s.deployments) && (isActiveDeploy(d) || now - (d.finishedAt ?? d.createdAt) < RECENT_CART_MS))
     .map((d) => d.id);
 
-  const out: Partial<State> = { ...slice, projects: paint(slice.projects, s.prefs, p.projects), ...withLayout(s, slice, s.prefs) };
+  const moved = s.ready ? detectMoves(s, slice, p) : null;
+  const transit = moved ? mergeTransit(s.transit, moved) : s.transit;
+  const out: Partial<State> = { ...slice, projects: paint(slice.projects, s.prefs, p.projects), ...withLayout(s, slice, s.prefs, transit) };
+  if (moved) {
+    out.transit = transit;
+    out.moving = { ...s.moving, ...Object.fromEntries(Object.values(moved.targets).map((id) => [id, true as const])) };
+  }
   if (fresh.length) out.carts = [...s.carts, ...fresh];
   if (s.selectedId && !(s.selectedId in slice.services)) out.selectedId = null;
   if (s.selectedProjectId && !(s.selectedProjectId in slice.projects)) out.selectedProjectId = null;
   if (s.hoveredId && !(s.hoveredId in slice.services)) out.hoveredId = null;
 
-  const events = diffEvents(s, slice, p);
-  if (events.length) out.events = [...events, ...s.events].slice(0, MAX_EVENTS);
+  let events = diffEvents(s, slice, p);
+  if (moved) {
+    // a recreated service is not news, its move is
+    const targets = new Set(Object.values(moved.targets));
+    const where = (id: string) => slice.projects[slice.services[id]?.projectId ?? '']?.name ?? 'another project';
+    events = events.filter((e) => !(e.kind === 'new-node' && e.serviceId && targets.has(e.serviceId)));
+    out.events = s.events.filter((e) => !(e.kind === 'new-node' && e.serviceId && targets.has(e.serviceId))); // announced too early
+    for (const id of targets)
+      if (!events.some((e) => e.kind === 'moved' && e.serviceId === id))
+        events.unshift(ev({ kind: 'moved', at: Date.now(), tone: 'info', text: `${slice.services[id]?.name ?? 'Rack'} moves`, detail: `to ${where(id)}`, serviceId: id }));
+  }
+  if (events.length || out.events) out.events = [...events, ...(out.events ?? s.events)].slice(0, MAX_EVENTS);
   if (p.services?.length) out.trends = sampleTrends(s.trends, slice.services, SAMPLE_SECONDS);
   return out;
 }
@@ -555,8 +688,9 @@ function diffEvents(s: State, next: WorldSlice, p: WorldPatch): ActivityEvent[] 
   for (const svc of p.services ?? []) {
     const prev = s.services[svc.id];
     if (!prev) {
-      // Container nodes (`<service>::<container>`) appear once stats arrive; not news.
-      if (!svc.id.includes('::')) out.push(ev({ kind: 'new-node', at: now, tone: 'info', text: `New node ${svc.name}`, detail: where(svc.id), serviceId: svc.id }));
+      // Container nodes (`<service>::<container>`) appear once stats arrive; not news. Neither is a
+      // service named like a container that just disappeared: that's a move about to be matched.
+      if (!svc.id.includes('::') && !graveyard.has(`c:${svc.name}`)) out.push(ev({ kind: 'new-node', at: now, tone: 'info', text: `New node ${svc.name}`, detail: where(svc.id), serviceId: svc.id }));
       continue;
     }
     if (prev.status !== svc.status) {

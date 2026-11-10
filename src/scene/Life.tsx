@@ -11,7 +11,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { isDb, type Backup } from '../data/types';
-import { RACK, routeFromGate, routeMove, routeToVault, type Layout, type V3 } from '../layout';
+import { RACK, routeBetween, routeFromGate, routeFromHome, routeHome, routeToVault, type Layout, type V3 } from '../layout';
 import { useStore } from '../store';
 import { ACCENT, BG, NEON } from '../theme';
 import { Label } from './Label';
@@ -201,80 +201,119 @@ const Truck = memo(function Truck({ route, onDone }: { route: V3[]; onDone: () =
   );
 });
 
-// ---- moved services: a technician with a hand truck --------------------------------------
+// ---- moved services: movers fetch the rack and wheel it to its new slot ------------------------
 
+const FETCH_SPEED = 2.3;
 const MOVE_SPEED = 1.6;
+const LOAD_S = 0.9;
+const TRANSIT_MAX_MS = 180_000;
+const MOVER_LANES = [0.2, -0.2, 0.42, -0.42, 0.6];
 
-/** Watches each node's project; when it changes, wheels the rack from the old building to the new slot. */
+/**
+ * One mover per rack in transit: from the waiting spot to the rack's old place (its ghost), load
+ * it, wheel it through doors and streets to its new slot, walk back. The store keeps the ghosts in
+ * the layout until the last rack has arrived, so nobody walks a stale route.
+ */
 export function Movers({ layout }: { layout: Layout }) {
-  const [jobs, setJobs] = useState<{ id: string; route: V3[]; delay: number; db: boolean }[]>([]);
-  const lastProject = useRef<Map<string, string> | null>(null);
+  const transit = useStore((s) => s.transit);
+  const still = useStore((s) => s.reducedMotion);
 
   useEffect(() => {
-    const before = lastProject.current;
-    lastProject.current = new Map(Object.values(layout.slots).map((s) => [s.serviceId, s.projectId]));
-    if (!before) return;
-    const services = useStore.getState().services;
-    const moved = Object.values(layout.slots).filter((s) => before.has(s.serviceId) && before.get(s.serviceId) !== s.projectId);
-    const next = moved
-      .map((s, k) => ({ id: s.serviceId, route: routeMove(layout, before.get(s.serviceId)!, s.serviceId), delay: k * 1.4, db: !!services[s.serviceId] && isDb(services[s.serviceId].kind) }))
-      .filter((j): j is { id: string; route: V3[]; delay: number; db: boolean } => !!j.route);
-    if (!next.length) return;
-    for (const j of next) useStore.getState().setMoving(j.id, true);
-    setJobs((all) => [...all.filter((x) => !next.some((n) => n.id === x.id)), ...next]);
-  }, [layout]);
+    if (!transit) return;
+    const finishAll = () => transit.ghosts.forEach((g) => useStore.getState().finishMove(g.id));
+    if (still) return finishAll();
+    const left = TRANSIT_MAX_MS - (Date.now() - transit.startedAt);
+    const id = setTimeout(finishAll, Math.max(0, left)); // never leave the map half-moved
+    return () => clearTimeout(id);
+  }, [transit, still]);
 
+  if (!transit) return null;
   return (
     <>
-      {jobs.map((j) => (
-        <Mover
-          key={`${j.id}:${j.route.length}:${j.route[0].join()}`}
-          route={j.route}
-          delay={j.delay}
-          db={j.db}
-          onDone={() => {
-            useStore.getState().setMoving(j.id, false);
-            setJobs((all) => all.filter((x) => x.id !== j.id));
-          }}
-        />
+      {transit.ghosts.map((g, k) => (
+        <Mover key={g.id} layout={layout} ghostId={g.id} targetId={transit.targets[g.id]} index={k} db={isDb(g.kind)} />
       ))}
     </>
   );
 }
 
-const Mover = memo(function Mover({ route, delay, db, onDone }: { route: V3[]; delay: number; db: boolean; onDone: () => void }) {
+type MovePhase = 'wait' | 'fetch' | 'load' | 'carry' | 'back' | 'gone';
+
+const Mover = memo(function Mover({ layout, ghostId, targetId, index, db }: { layout: Layout; ghostId: string; targetId: string; index: number; db: boolean }) {
   const root = useRef<THREE.Group>(null);
+  const cargo = useRef<THREE.Group>(null);
   const legL = useRef<THREE.Group>(null);
   const legR = useRef<THREE.Group>(null);
   const armL = useRef<THREE.Group>(null);
   const armR = useRef<THREE.Group>(null);
-  const walker = useMemo(() => new Walker(route), [route]);
-  const st = useRef({ wait: delay, t: 0, done: false });
-  const still = useStore((s) => s.reducedMotion);
+  const lane = MOVER_LANES[index % MOVER_LANES.length];
+  const home: V3 = [layout.home[0] + 1.2 + (index % 4) * 0.5, 0, layout.home[2] + 0.6];
+  const st = useRef({ phase: 'wait' as MovePhase, wait: index * 1.6, t: 0, walker: null as Walker | null, loaded: false });
+
+  // a new layout (another change came in): start the current leg over on the new routes
+  useEffect(() => {
+    const s = st.current;
+    if (s.phase === 'fetch') s.walker = walkerFor(fromHome(routeFromHome(layout, ghostId, lane), home));
+    else if (s.phase === 'carry') s.walker = walkerFor(routeBetween(layout, ghostId, targetId, lane));
+    else if (s.phase === 'back') s.walker = walkerFor(toHome(routeHome(layout, targetId, lane), home));
+  }, [layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useFrame((_, rawDt) => {
     const g = root.current;
     const s = st.current;
-    if (!g || s.done) return;
+    if (!g) return;
     const dt = Math.min(rawDt, 0.1);
     s.t += dt;
-    g.visible = s.wait <= 0;
-    if (s.wait > 0) {
-      s.wait -= dt;
-      return;
+    const store = useStore.getState();
+    switch (s.phase) {
+      case 'wait':
+        if ((s.wait -= dt) <= 0) {
+          s.walker = walkerFor(fromHome(routeFromHome(layout, ghostId, lane), home));
+          s.phase = s.walker ? 'fetch' : 'gone';
+          if (!s.walker) store.finishMove(ghostId);
+        }
+        break;
+      case 'fetch':
+        if (s.walker!.step(FETCH_SPEED * dt)) {
+          store.pickUp(ghostId); // the rack leaves its old slot, onto the hand truck
+          s.loaded = true;
+          s.phase = 'load';
+          s.wait = LOAD_S;
+        }
+        break;
+      case 'load':
+        if ((s.wait -= dt) <= 0) {
+          s.walker = walkerFor(routeBetween(layout, ghostId, targetId, lane));
+          if (!s.walker) {
+            store.finishMove(ghostId);
+            s.phase = 'gone';
+          } else s.phase = 'carry';
+        }
+        break;
+      case 'carry':
+        if (s.walker!.step(MOVE_SPEED * dt)) {
+          store.finishMove(ghostId); // set down: the rack stands at its new slot
+          s.loaded = false;
+          s.walker = walkerFor(toHome(routeHome(layout, targetId, lane), home));
+          s.phase = s.walker ? 'back' : 'gone';
+        }
+        break;
+      case 'back':
+        if (s.walker!.step(FETCH_SPEED * dt)) s.phase = 'gone';
+        break;
     }
-    if (walker.step(MOVE_SPEED * dt)) {
-      s.done = true;
-      onDone();
-      return;
-    }
-    g.position.copy(walker.pos);
-    g.rotation.y = dampAngle(g.rotation.y, walker.heading, 8, dt);
-    const swing = still ? 0 : Math.sin(s.t * 9) * 0.5;
+    g.visible = s.phase !== 'wait' && s.phase !== 'gone';
+    if (!g.visible || !s.walker) return;
+    g.position.copy(s.walker.pos);
+    if (s.phase !== 'load') g.rotation.y = dampAngle(g.rotation.y, s.walker.heading, 8, dt);
+    if (cargo.current) cargo.current.visible = s.loaded;
+    const walking = s.phase !== 'load';
+    const swing = walking ? Math.sin(s.t * 9) * 0.5 : 0;
     if (legL.current) legL.current.rotation.x = swing;
     if (legR.current) legR.current.rotation.x = -swing;
-    if (armL.current) armL.current.rotation.x = -0.9; // both hands on the hand truck
-    if (armR.current) armR.current.rotation.x = -0.9;
+    const grip = s.phase === 'load' ? -1.4 + Math.sin(s.t * 6) * 0.3 : -0.9; // both hands on the hand truck
+    if (armL.current) armL.current.rotation.x = grip;
+    if (armR.current) armR.current.rotation.x = grip;
   });
 
   // Hand truck in front of the technician, the rack tilted back onto it.
@@ -294,14 +333,20 @@ const Mover = memo(function Mover({ route, delay, db, onDone }: { route: V3[]; d
             <meshStandardMaterial color="#141a24" />
           </mesh>
         ))}
+        <group ref={cargo} visible={false}>
         <mesh position={[0, db ? 0.38 : 0.52, 0.1]} castShadow scale={0.55}>
           {db ? <cylinderGeometry args={[0.45, 0.45, 1.1, 18]} /> : <boxGeometry args={[RACK.w, RACK.h, RACK.d]} />}
           <meshStandardMaterial color="#1b2536" metalness={0.6} roughness={0.35} emissive={NEON} emissiveIntensity={0.12} />
         </mesh>
+        </group>
       </group>
     </group>
   );
 });
+
+const walkerFor = (route: V3[] | null) => (route && route.length > 1 ? new Walker(route) : null);
+const fromHome = (route: V3[] | null, home: V3): V3[] | null => (route ? [home, ...route.slice(1)] : null);
+const toHome = (route: V3[] | null, home: V3): V3[] | null => (route ? [...route.slice(0, -1), home] : null);
 
 // ---- day and night -----------------------------------------------------------------------
 

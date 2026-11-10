@@ -21,8 +21,8 @@ export const unitHeight = (svc: Service) => (isDb(svc.kind) ? 0.08 + TANK.h + TA
 /** One service in the scene: wiring (data, pointer events) around a dumb Cabinet / Tank. */
 export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
   const id = slot.serviceId;
-  const svc = useStore((s) => s.services[id]);
-  const project = useStore((s) => s.projects[slot.projectId]);
+  const svc = useStore((s) => s.services[id] ?? s.transit?.ghosts.find((g) => g.id === id));
+  const project = useStore((s) => s.projects[slot.projectId] ?? s.transit?.projects.find((p) => p.id === slot.projectId));
   const env = useStore((s) => s.environments[slot.environmentId]);
   const search = useStore((s) => s.search);
   const heatmap = useStore((s) => s.heatmap);
