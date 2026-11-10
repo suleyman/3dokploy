@@ -9,7 +9,8 @@
  * Plain, erasable TypeScript so Node ≥ 22.6 runs it directly (`node server/index.ts` on Node 24).
  */
 import './env.ts';
-import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
@@ -45,6 +46,12 @@ const CSP = [
   "form-action 'self'",
 ].join('; ');
 
+// Identifies the built app: index.html names the hashed bundles, so a new build changes it. Open
+// pages poll /api/build and reload once a new build answers (see src/update.ts).
+const BUILD = existsSync(`${STATIC_DIR}/index.html`)
+  ? createHash('sha1').update(readFileSync(`${STATIC_DIR}/index.html`)).digest('hex').slice(0, 12)
+  : 'dev';
+
 const app = new Hono();
 
 app.get('/healthz', (c) => c.json({ ok: true }));
@@ -56,11 +63,17 @@ app.use('*', async (c, next) => {
   c.header('x-content-type-options', 'nosniff');
   c.header('referrer-policy', 'no-referrer');
   if (!c.req.path.startsWith('/api/')) c.header('content-security-policy', CSP);
+  // The page itself is never cached (a redeploy must show at once); the hashed assets can be.
+  if (!c.req.path.startsWith('/api/') && !c.req.path.startsWith('/assets/')) c.header('cache-control', 'no-cache');
 });
 
 const prefsApi = prefs();
 app.get('/api/prefs', prefsApi.get);
 app.put('/api/prefs', prefsApi.put);
+app.get('/api/build', (c) => {
+  c.header('cache-control', 'no-store');
+  return c.json({ build: BUILD });
+});
 app.get('/api/kuma', kuma());
 app.get('/api/glitchtip', glitchtip());
 app.get('/api/umami', umami());
