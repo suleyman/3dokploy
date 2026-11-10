@@ -61,6 +61,14 @@ build type and port **3000**, set the variables below, then add a domain.
 | `PORT` | `3000` | Port the server listens on |
 | `KUMA_URL` | – | Optional [Uptime Kuma](https://github.com/louislam/uptime-kuma), e.g. `http://host.docker.internal:3001` |
 | `KUMA_API_KEY` | – | Kuma API key (Settings → API Keys). With both set, a monitor that is down on one of a service's domains puts that node in error. |
+| `GLITCHTIP_URL` / `GLITCHTIP_TOKEN` | – | GlitchTip or Sentry: unresolved issues per project become sparks and an error badge on the matching rack. |
+| `UMAMI_URL` / `UMAMI_API_KEY` | – | Umami: active visitors walk in through the gate to their site's rack. |
+| `CROWDSEC_URL` / `CROWDSEC_BOUNCER_KEY` | – | CrowdSec LAPI: blocked attackers bounce off the gate, with a counter. |
+| `DOCKER_PROXY_URL` | – | A [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) with `CONTAINERS=1` only: container log lines in the inspector (secrets masked). |
+| `BACKUP_STATUS_FILE` | – | JSON from a sidecar (name, newest file time, size per backup folder): the backup vault and its trucks. The dumps themselves never reach 3Dokploy. |
+| `PREFS_FILE` | `/data/prefs.json` | Building order, complexes and colour presets, shared by all viewers. Mount a volume on `/data`. |
+
+Every integration is off until its variables are set, read-only, and answers `enabled: false` instead of an error, so an unconfigured one never floods the logs or a WAF.
 
 Without `BASIC_AUTH`, **anyone who can open the page sees your Dokploy** (read-only, secrets
 stripped). Put it behind HTTPS if it's reachable from the internet.
