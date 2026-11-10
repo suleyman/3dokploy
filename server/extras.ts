@@ -108,7 +108,8 @@ export function activeVisitors(body: unknown): number {
 export function umami() {
   const url = base('UMAMI_URL');
   const key = env('UMAMI_API_KEY');
-  const auth = { 'x-umami-api-key': key ?? '' };
+  // self-hosted Umami checks the key as a Bearer token; Umami Cloud reads x-umami-api-key
+  const auth = { authorization: `Bearer ${key}`, 'x-umami-api-key': key ?? '' };
   const load = cached(15_000, async () => {
     const body = (await getJson(`${url}/api/websites?pageSize=200`, auth)) as { data?: { id: string; domain?: string }[] } | { id: string; domain?: string }[];
     const sites = Array.isArray(body) ? body : (body.data ?? []);
@@ -130,6 +131,9 @@ export function umami() {
 
 // ---- CrowdSec ----------------------------------------------------------------------------------
 
+/** Decisions from this server's own detections; CAPI / blocklists are thousands of community entries. */
+const LOCAL = new Set(['crowdsec', 'cscli']);
+
 /** Keeps "bans seen today" across polls (no database, so it restarts with the server). */
 export class BanCounter {
   private seen = new Set<string>();
@@ -137,7 +141,7 @@ export class BanCounter {
   today = 0;
   lastAt = 0;
 
-  update(decisions: { id?: number | string; type?: string }[], now = Date.now()) {
+  update(decisions: { id?: number | string; type?: string; origin?: string }[], now = Date.now()) {
     const day = new Date(now).toISOString().slice(0, 10);
     if (day !== this.day) {
       this.day = day;
@@ -146,7 +150,7 @@ export class BanCounter {
     const first = this.seen.size === 0;
     const ids = new Set<string>();
     for (const d of decisions) {
-      if (d.type && d.type !== 'ban') continue;
+      if ((d.type && d.type !== 'ban') || (d.origin && !LOCAL.has(d.origin))) continue;
       const id = String(d.id ?? '');
       ids.add(id);
       if (!first && !this.seen.has(id)) {
