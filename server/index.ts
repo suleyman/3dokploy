@@ -17,6 +17,7 @@ import { basicAuth } from 'hono/basic-auth';
 import { forward, loadTarget } from './dokploy.ts';
 import { backups, certs, crowdsec, glitchtip, host, logs, umami } from './extras.ts';
 import { kuma } from './kuma.ts';
+import { prefs } from './prefs.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const STATIC_DIR = process.env.STATIC_DIR ?? 'dist';
@@ -57,6 +58,9 @@ app.use('*', async (c, next) => {
   if (!c.req.path.startsWith('/api/')) c.header('content-security-policy', CSP);
 });
 
+const prefsApi = prefs();
+app.get('/api/prefs', prefsApi.get);
+app.put('/api/prefs', prefsApi.put);
 app.get('/api/kuma', kuma());
 app.get('/api/glitchtip', glitchtip());
 app.get('/api/umami', umami());

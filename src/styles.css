@@ -1886,3 +1886,80 @@ a:focus-visible {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ---- building settings (project panel) ------------------------------------------------- */
+.building-settings {
+  display: grid;
+  gap: 8px;
+}
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.swatch-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--swatch);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--swatch) 55%, transparent);
+  cursor: pointer;
+}
+.swatch-btn.auto {
+  width: auto;
+  padding: 0 8px;
+  border-radius: 11px;
+  background: transparent;
+  border-color: var(--border-strong);
+  box-shadow: none;
+  color: var(--text);
+  font: 600 10px/18px var(--mono);
+}
+.swatch-btn.is-on {
+  border-color: var(--text);
+}
+.swatch-btn:focus-visible {
+  outline: 2px solid var(--neon);
+  outline-offset: 2px;
+}
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.text-btn {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 500 12px/1.4 var(--font);
+  cursor: pointer;
+}
+.text-btn:hover {
+  border-color: var(--neon);
+}
+.complex-select,
+.complex-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 500 12px/1.4 var(--font);
+}
+.complex-label {
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 700 11px/1.5 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}

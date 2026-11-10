@@ -141,7 +141,8 @@ export function Vault({ layout }: { layout: Layout }) {
           <boxGeometry args={[0.02, 0.7, 0.6]} />
           <meshBasicMaterial color={stale.length ? '#ff5470' : '#2bff9a'} toneMapped={false} />
         </mesh>
-        <Label position={[0, 1.55, 0]} zIndex={4}>
+        {/* anchored right: the panel opens away from the buildings */}
+        <Label position={[-1, 1.2, 0]} anchor="right" zIndex={4}>
           <VaultPanel backups={backups} now={now} />
         </Label>
       </group>
@@ -154,13 +155,15 @@ export function Vault({ layout }: { layout: Layout }) {
 
 const age = (ms: number) => (ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))}m` : ms < 172_800_000 ? `${Math.round(ms / 3_600_000)}h` : `${Math.round(ms / 86_400_000)}d`);
 
+const size = (mb: number) => (mb >= 1 ? `${mb} MB` : `${Math.max(1, Math.round(mb * 1000))} KB`);
+
 function VaultPanel({ backups, now }: { backups: Backup[]; now: number }) {
   return (
     <div className="vault-panel">
       <strong>Backups</strong>
       {backups.map((b) => (
         <span key={b.name} className={!b.newest || now - b.newest > STALE_MS ? 'is-stale' : ''}>
-          {b.name.replace(/-backup(-\d+)?$/, '')} · {b.newest ? `${age(now - b.newest)} ago · ${b.sizeMb} MB` : 'none yet'}
+          {b.name.replace(/-backup(-\d+)?$/, '')} · {b.newest ? `${age(now - b.newest)} ago · ${size(b.sizeMb)}` : 'none yet'}
         </span>
       ))}
     </div>
@@ -389,4 +392,41 @@ export function Tour() {
     return () => clearInterval(id);
   }, [tour]);
   return null;
+}
+
+// ---- complexes ---------------------------------------------------------------------------
+
+/** A plate with a glowing rim and a name under the buildings of each complex. */
+export function Complexes({ layout }: { layout: Layout }) {
+  return (
+    <>
+      {layout.complexes.map((c) => {
+        const w = c.x1 - c.x0;
+        const d = c.z1 - c.z0;
+        const rim = 0.05;
+        return (
+          <group key={c.id}>
+            <mesh position={[c.x0 + w / 2, 0.001, c.z0 + d / 2]} rotation-x={-Math.PI / 2} receiveShadow>
+              <planeGeometry args={[w, d]} />
+              <meshStandardMaterial color="#0b1424" transparent opacity={0.55} depthWrite={false} />
+            </mesh>
+            {[
+              [c.x0 + w / 2, c.z0, w, rim],
+              [c.x0 + w / 2, c.z1, w, rim],
+              [c.x0, c.z0 + d / 2, rim, d],
+              [c.x1, c.z0 + d / 2, rim, d],
+            ].map(([x, z, sx, sz], i) => (
+              <mesh key={i} position={[x, 0.004, z]} rotation-x={-Math.PI / 2}>
+                <planeGeometry args={[sx, sz]} />
+                <meshBasicMaterial color={ACCENT} toneMapped={false} transparent opacity={0.8} />
+              </mesh>
+            ))}
+            <Label position={[c.x0 + 0.2, 0.05, c.z1 + 0.35]} anchor="left" zIndex={3}>
+              <div className="complex-label">{c.name}</div>
+            </Label>
+          </group>
+        );
+      })}
+    </>
+  );
 }

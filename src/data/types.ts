@@ -40,6 +40,18 @@ export interface Project {
 }
 
 /** Dokploy: project → environment (production, staging…) → services. */
+/** Map preferences shared by all viewers (server /api/prefs): building order, complexes, colours. */
+export interface MapPrefs {
+  /** Project ids in the order the buildings should appear (unlisted ones follow by name). */
+  order: string[];
+  /** Complexes: groups of buildings placed together on one plate. */
+  groups: { id: string; name: string; projects: string[] }[];
+  /** Project id → colour preset key (see theme PRESETS). */
+  colors: Record<string, string>;
+}
+
+export const EMPTY_PREFS: MapPrefs = { order: [], groups: [], colors: {} };
+
 export interface Environment {
   id: string;
   projectId: string;

@@ -11,7 +11,7 @@ import { Agents } from './Agents';
 import { DataFlow } from './DataFlow';
 import { DeployBeams, Pulses } from './Effects';
 import { InfiniteGrid } from './InfiniteGrid';
-import { Movers, Sky, Tour, Vault, Visitors } from './Life';
+import { Complexes, Movers, Sky, Tour, Vault, Visitors } from './Life';
 import { Building } from './Building';
 import { animateLeds } from './materials';
 import { Markers, ServiceUnit } from './Rack';
@@ -59,6 +59,7 @@ export function Scene() {
       {layout && (
         // Keyed by session: a reconnect rebuilds agents, effects and the camera fit.
         <group key={session}>
+          <Complexes layout={layout} />
           {layout.buildings.map((b) => (
             <Building key={b.projectId} b={b} />
           ))}

@@ -7,7 +7,9 @@
 import { create } from 'zustand';
 import { SAMPLE_SECONDS, type DataSource } from './data/source';
 import {
+  EMPTY_PREFS,
   isActiveDeploy,
+  type MapPrefs,
   type Alert,
   type Deployment,
   type Environment,
@@ -19,7 +21,8 @@ import {
   type WorldPatch,
 } from './data/types';
 import { duration } from './format';
-import { computeLayout, structureKey, type Layout } from './layout';
+import { computeLayout, orderBuildings, structureKey, type Layout } from './layout';
+import { presetHex } from './theme';
 import { trouble } from './trouble';
 
 export type MenuTab = 'activity' | 'deploys' | 'alerts' | 'services' | 'projects';
@@ -115,6 +118,10 @@ export interface State extends WorldSlice {
   muted: boolean;
   /** Wall-display mode: the camera tours buildings and stops at incidents. */
   tour: boolean;
+  /** Building order, complexes and colour presets (shared through the server's /api/prefs). */
+  prefs: MapPrefs;
+  /** null while loading; false when the server can't store them (kept in this browser only). */
+  prefsShared: boolean | null;
   /** Nodes being wheeled to another project's building (hidden at their new spot until they arrive). */
   moving: Rec<true>;
 
@@ -132,6 +139,13 @@ export interface State extends WorldSlice {
   toggleHeatmap(): void;
   toggleMute(): void;
   toggleTour(): void;
+  setProjectColor(projectId: string, preset: string | null): void;
+  /** Swaps a building with its neighbour (-1 earlier, 1 later) inside its complex, or among the buildings without one. */
+  moveProject(projectId: string, dir: -1 | 1): void;
+  setProjectComplex(projectId: string, complexId: string | null): void;
+  createComplex(name: string, projectId: string): void;
+  renameComplex(complexId: string, name: string): void;
+  removeComplex(complexId: string): void;
   setMoving(id: string, on: boolean): void;
   /** Opens a header dropdown, or closes it when it's already open (null closes any). */
   toggleMenu(tab: MenuTab | null): void;
@@ -155,14 +169,63 @@ function merge<T extends { id: string }>(rec: Rec<T>, upserts?: T[], removed?: s
   return next;
 }
 
-function withLayout(s: Pick<State, 'layoutKey' | 'layout'>, w: WorldSlice): Pick<State, 'layoutKey' | 'layout'> {
+function withLayout(s: Pick<State, 'layoutKey' | 'layout'>, w: WorldSlice, prefs: MapPrefs): Pick<State, 'layoutKey' | 'layout'> {
   const structure = {
     projects: Object.values(w.projects),
     environments: Object.values(w.environments),
     services: Object.values(w.services),
   };
-  const key = structureKey(structure);
-  return key === s.layoutKey ? { layoutKey: s.layoutKey, layout: s.layout } : { layoutKey: key, layout: computeLayout(structure) };
+  const key = structureKey(structure, prefs);
+  return key === s.layoutKey ? { layoutKey: s.layoutKey, layout: s.layout } : { layoutKey: key, layout: computeLayout(structure, prefs) };
+}
+
+/** Each project's automatic colour, so "Auto" can restore it after a preset. */
+const autoColor = new Map<string, string>();
+
+/** Applies colour presets on top of the automatic colours. */
+function paint(projects: Rec<Project>, prefs: MapPrefs, fresh: Project[] = []): Rec<Project> {
+  for (const p of fresh) autoColor.set(p.id, p.color);
+  const out: Rec<Project> = {};
+  for (const [id, p] of Object.entries(projects)) {
+    const color = presetHex(prefs.colors[id]) ?? autoColor.get(id) ?? p.color;
+    out[id] = color === p.color ? p : { ...p, color };
+  }
+  return out;
+}
+
+const PREFS_KEY = '3dokploy:prefs';
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Server first (shared by every viewer), this browser's copy as fallback. */
+async function loadPrefs(): Promise<{ prefs: MapPrefs; shared: boolean }> {
+  try {
+    const res = await fetch('/api/prefs', { headers: { accept: 'application/json' } });
+    const body = (await res.json()) as { stored?: boolean; prefs?: MapPrefs; error?: string };
+    if (res.ok && body.prefs && !body.error) return { prefs: body.prefs, shared: true };
+  } catch {
+    // offline, or a server without /api/prefs: fall through
+  }
+  try {
+    const local = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null') as MapPrefs | null;
+    if (local?.order && local.groups && local.colors) return { prefs: local, shared: false };
+  } catch {
+    // storage blocked
+  }
+  return { prefs: EMPTY_PREFS, shared: false };
+}
+
+function savePrefs(prefs: MapPrefs, done: (shared: boolean) => void) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // storage blocked
+  }
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fetch('/api/prefs', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(prefs) })
+      .then((r) => done(r.ok))
+      .catch(() => done(false));
+  }, 400);
 }
 
 const reducedMotionQuery = typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -203,6 +266,8 @@ export const useStore = create<State>()((set, get) => ({
   search: '',
   heatmap: false,
   tour: false,
+  prefs: EMPTY_PREFS,
+  prefsShared: null,
   moving: {},
   menu: null,
   seenEventsAt: Date.now(),
@@ -241,6 +306,11 @@ export const useStore = create<State>()((set, get) => ({
       menu: null,
     }));
 
+    void loadPrefs().then(({ prefs, shared }) => {
+      if (cancelled) return;
+      set((s) => ({ prefs, prefsShared: shared, projects: paint(s.projects, prefs), ...withLayout(s, s, prefs) }));
+    });
+
     const load = () =>
       src.load().then(
         (world: World) => {
@@ -255,7 +325,8 @@ export const useStore = create<State>()((set, get) => ({
           };
           set({
             ...slice,
-            ...withLayout({ layoutKey: '', layout: null }, slice),
+            projects: paint(slice.projects, get().prefs, world.projects),
+            ...withLayout({ layoutKey: '', layout: null }, slice, get().prefs),
             carts: world.deployments.filter(isActiveDeploy).map((d) => d.id),
             events: seedEvents(slice),
             trends: sampleTrends({ at: [], cpu: [], mem: [], net: [] }, slice.services, 0),
@@ -331,6 +402,52 @@ export const useStore = create<State>()((set, get) => ({
   toggleTour() {
     set((s) => ({ tour: !s.tour }));
   },
+  setProjectColor(projectId, preset) {
+    updatePrefs((p) => {
+      const colors = { ...p.colors };
+      if (preset) colors[projectId] = preset;
+      else delete colors[projectId];
+      return { ...p, colors };
+    });
+  },
+  moveProject(projectId, dir) {
+    updatePrefs((p, s) => {
+      const segments = orderBuildings(Object.values(s.projects), p);
+      const seg = segments.find((x) => x.projects.some((q) => q.id === projectId));
+      if (!seg) return p;
+      const ids = seg.projects.map((q) => q.id);
+      const i = ids.indexOf(projectId);
+      const j = i + dir;
+      if (j < 0 || j >= ids.length) return p;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      // the whole display order, with this segment's new order in place
+      return { ...p, order: segments.flatMap((x) => (x === seg ? ids : x.projects.map((q) => q.id))) };
+    });
+  },
+  setProjectComplex(projectId, complexId) {
+    updatePrefs((p) => ({
+      ...p,
+      groups: p.groups
+        .map((g) => ({ ...g, projects: g.id === complexId ? [...g.projects.filter((id) => id !== projectId), projectId] : g.projects.filter((id) => id !== projectId) }))
+        .filter((g) => g.projects.length),
+    }));
+  },
+  createComplex(name, projectId) {
+    const id = 'c' + Date.now().toString(36);
+    updatePrefs((p) => ({
+      ...p,
+      groups: [
+        ...p.groups.map((g) => ({ ...g, projects: g.projects.filter((x) => x !== projectId) })).filter((g) => g.projects.length),
+        { id, name: name.trim().slice(0, 40) || 'Complex', projects: [projectId] },
+      ],
+    }));
+  },
+  renameComplex(complexId, name) {
+    updatePrefs((p) => ({ ...p, groups: p.groups.map((g) => (g.id === complexId ? { ...g, name: name.trim().slice(0, 40) || g.name } : g)) }));
+  },
+  removeComplex(complexId) {
+    updatePrefs((p) => ({ ...p, groups: p.groups.filter((g) => g.id !== complexId) }));
+  },
   setMoving(id, on) {
     set((s) => {
       const moving = { ...s.moving };
@@ -385,7 +502,7 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
     .filter((d) => !(d.id in s.deployments) && (isActiveDeploy(d) || now - (d.finishedAt ?? d.createdAt) < RECENT_CART_MS))
     .map((d) => d.id);
 
-  const out: Partial<State> = { ...slice, ...withLayout(s, slice) };
+  const out: Partial<State> = { ...slice, projects: paint(slice.projects, s.prefs, p.projects), ...withLayout(s, slice, s.prefs) };
   if (fresh.length) out.carts = [...s.carts, ...fresh];
   if (s.selectedId && !(s.selectedId in slice.services)) out.selectedId = null;
   if (s.selectedProjectId && !(s.selectedProjectId in slice.projects)) out.selectedProjectId = null;
@@ -395,6 +512,15 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
   if (events.length) out.events = [...events, ...s.events].slice(0, MAX_EVENTS);
   if (p.services?.length) out.trends = sampleTrends(s.trends, slice.services, SAMPLE_SECONDS);
   return out;
+}
+
+/** Changes the map preferences: re-lays out and repaints at once, then saves (debounced). */
+function updatePrefs(change: (p: MapPrefs, s: State) => MapPrefs) {
+  const s = useStore.getState();
+  const prefs = change(s.prefs, s);
+  if (prefs === s.prefs) return;
+  useStore.setState({ prefs, projects: paint(s.projects, prefs), ...withLayout(s, s, prefs) });
+  savePrefs(prefs, (shared) => useStore.setState({ prefsShared: shared }));
 }
 
 // ---- activity feed + trends -----------------------------------------------------------

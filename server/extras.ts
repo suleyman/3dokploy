@@ -233,7 +233,7 @@ export function backups() {
     try {
       const rows = JSON.parse(await readFile(file, 'utf8')) as { name: string; newest: number; size: number; files: number }[];
       // newest is epoch seconds from `stat`; 0 = empty folder
-      return json(c, { enabled: true, backups: rows.map((r) => ({ name: r.name, newest: r.newest * 1000, sizeMb: Math.round(r.size / 1e5) / 10, files: r.files })) });
+      return json(c, { enabled: true, backups: rows.map((r) => ({ name: r.name, newest: r.newest * 1000, sizeMb: r.size >= 1e6 ? Math.round(r.size / 1e5) / 10 : Math.round(r.size / 1e3) / 1e3, files: r.files })) });
     } catch (e) {
       return json(c, { enabled: true, backups: [], error: `Backups: ${errorOf(e)}` });
     }
