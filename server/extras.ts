@@ -49,27 +49,51 @@ const errorOf = (e: unknown) => (e as Error).message;
 
 // ---- GlitchTip ---------------------------------------------------------------------------------
 
+export interface Issue {
+  title: string;
+  culprit?: string;
+  count: number;
+  lastSeen: number;
+  level?: string;
+  /** link to the issue in GlitchTip */
+  url?: string;
+}
+
 export interface ProjectErrors {
   project: string;
   unresolved: number;
   events: number;
   /** epoch ms of the newest event across the project's unresolved issues */
   lastSeen: number;
+  /** the newest few, for the inspector */
+  issues: Issue[];
 }
+
+const ISSUES_PER_PROJECT = 5;
 
 /** Issues (GlitchTip/Sentry shape) → one row per project slug. */
 export function groupIssues(issues: unknown[]): ProjectErrors[] {
   const by = new Map<string, ProjectErrors>();
   for (const raw of issues) {
-    const i = raw as { project?: { slug?: string }; count?: string | number; lastSeen?: string };
+    const i = raw as { project?: { slug?: string }; count?: string | number; lastSeen?: string; title?: string; culprit?: string; level?: string; permalink?: string };
     const slug = i.project?.slug;
     if (!slug) continue;
-    const row = by.get(slug) ?? { project: slug, unresolved: 0, events: 0, lastSeen: 0 };
+    const row = by.get(slug) ?? { project: slug, unresolved: 0, events: 0, lastSeen: 0, issues: [] };
+    const lastSeen = Date.parse(i.lastSeen ?? '') || 0;
     row.unresolved++;
     row.events += Number(i.count) || 0;
-    row.lastSeen = Math.max(row.lastSeen, Date.parse(i.lastSeen ?? '') || 0);
+    row.lastSeen = Math.max(row.lastSeen, lastSeen);
+    row.issues.push({
+      title: String(i.title ?? 'Error').slice(0, 200),
+      ...(i.culprit ? { culprit: String(i.culprit).slice(0, 120) } : {}),
+      count: Number(i.count) || 0,
+      lastSeen,
+      ...(i.level ? { level: String(i.level).slice(0, 12) } : {}),
+      ...(typeof i.permalink === 'string' && /^https?:\/\//.test(i.permalink) ? { url: i.permalink.slice(0, 300) } : {}),
+    });
     by.set(slug, row);
   }
+  for (const row of by.values()) row.issues = row.issues.sort((a, b) => b.lastSeen - a.lastSeen).slice(0, ISSUES_PER_PROJECT);
   return [...by.values()];
 }
 

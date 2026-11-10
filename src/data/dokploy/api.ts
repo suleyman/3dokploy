@@ -325,7 +325,11 @@ export interface KumaState {
 }
 
 export interface Extras {
-  glitchtip?: { enabled: boolean; projects: { project: string; unresolved: number; events: number; lastSeen: number }[]; error?: string };
+  glitchtip?: {
+    enabled: boolean;
+    projects: { project: string; unresolved: number; events: number; lastSeen: number; issues?: NonNullable<Service['issues']> }[];
+    error?: string;
+  };
   umami?: { enabled: boolean; sites: { domain: string; visitors: number }[]; error?: string };
   crowdsec?: { enabled: boolean; active?: number; today?: number; lastAt?: number; error?: string };
   host?: { enabled: boolean; diskUsed: number | null; memUsed: number | null };

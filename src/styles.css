@@ -1963,3 +1963,55 @@ a:focus-visible {
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* ---- inspector: incident banner and GlitchTip issues ------------------------------------- */
+.incident-banner {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--crit) 55%, transparent);
+  background: var(--crit-soft);
+  color: var(--crit-text);
+  font: 500 12px/1.45 var(--font);
+}
+.issue-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.issue-list li {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-left: 3px solid #ffd23d;
+  background: rgba(0, 0, 0, 0.25);
+}
+.issue-title {
+  font: 600 12px/1.4 var(--font);
+  overflow-wrap: anywhere;
+}
+.issue-culprit {
+  font-size: 11px;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+.issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  color: var(--neon);
+  font: 500 11px/1.4 var(--font);
+  text-decoration: none;
+}
+.issue-link:hover {
+  text-decoration: underline;
+}
+.issue-link svg {
+  width: 11px;
+  height: 11px;
+}

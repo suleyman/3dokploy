@@ -394,6 +394,7 @@ export class Collector {
       if (!node) continue;
       node.errors = (node.errors ?? 0) + p.unresolved;
       node.errorAt = Math.max(node.errorAt ?? 0, p.lastSeen);
+      node.issues = [...(node.issues ?? []), ...(p.issues ?? [])].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 5);
     }
   }
 

@@ -95,6 +95,8 @@ export interface Service {
   /** GlitchTip (optional): unresolved issues and epoch ms of the newest event. */
   errors?: number;
   errorAt?: number;
+  /** The newest unresolved GlitchTip issues of this node, for the inspector. */
+  issues?: { title: string; culprit?: string; count: number; lastSeen: number; level?: string; url?: string }[];
   /** Umami (optional): visitors on the site right now. */
   visitors?: number;
   /** Kuma (optional): slowest response time of the site's monitors, ms. */

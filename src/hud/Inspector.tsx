@@ -56,6 +56,37 @@ export function Inspector() {
 
       {svc.description && <p className="insp-desc">{svc.description}</p>}
 
+      {svc.status === 'error' && (
+        <p className="incident-banner" role="alert">
+          {svc.incident ?? 'Dokploy reports this service as errored.'}
+        </p>
+      )}
+
+      {!!svc.issues?.length && (
+        <section>
+          <h3 className="section-title">
+            Errors · GlitchTip <span className="muted small">{svc.errors ?? svc.issues.length} open</span>
+          </h3>
+          <ul className="issue-list">
+            {svc.issues.map((issue, i) => (
+              <li key={issue.url ?? i}>
+                <strong className="issue-title">{issue.title}</strong>
+                {issue.culprit && <span className="issue-culprit mono">{issue.culprit}</span>}
+                <span className="muted small">
+                  {issue.count}× · last {ago(issue.lastSeen, now)}
+                  {issue.level && issue.level !== 'error' ? ` · ${issue.level}` : ''}
+                </span>
+                {issue.url && (
+                  <a className="issue-link" href={issue.url} target="_blank" rel="noopener noreferrer">
+                    Open in GlitchTip <ExternalIcon />
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="insp-card">
         <div className="insp-card-head">
           <span className="label">CPU</span>
