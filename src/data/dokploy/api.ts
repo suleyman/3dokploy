@@ -320,9 +320,26 @@ export async function fetchComposeContainers(t: Transport, appName: string): Pro
 
 export interface KumaState {
   enabled: boolean;
-  monitors: { name: string; type: string; url?: string; status: number }[];
+  monitors: { name: string; type: string; url?: string; status: number; responseMs?: number }[];
   error?: string;
 }
+
+export interface Extras {
+  glitchtip?: { enabled: boolean; projects: { project: string; unresolved: number; events: number; lastSeen: number }[]; error?: string };
+  umami?: { enabled: boolean; sites: { domain: string; visitors: number }[]; error?: string };
+  crowdsec?: { enabled: boolean; active?: number; today?: number; lastAt?: number; error?: string };
+  host?: { enabled: boolean; diskUsed: number | null; memUsed: number | null };
+  backups?: { enabled: boolean; backups: { name: string; newest: number; sizeMb: number; files: number }[]; error?: string };
+}
+
+/** One optional integration of the 3Dokploy server (see server/extras.ts). */
+export const fetchExtra = <K extends keyof Extras>(t: Transport, name: K) => get<NonNullable<Extras[K]>>(t, `/api/${name}`);
+
+export const fetchCerts = (t: Transport, hosts: string[]) =>
+  get<{ certs: Record<string, number | null> }>(t, `/api/certs?hosts=${q(hosts.join(','))}`, 30_000);
+
+export const fetchContainerLogs = (t: Transport, container: string, tail = 40) =>
+  get<{ enabled: boolean; lines: string[]; error?: string }>(t, `/api/logs?container=${q(container)}&tail=${tail}`);
 
 /** Uptime Kuma monitor states via the 3Dokploy server (empty unless KUMA_URL/KUMA_API_KEY are set). */
 export const fetchKuma = (t: Transport) => get<KumaState>(t, '/api/kuma');

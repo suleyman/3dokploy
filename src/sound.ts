@@ -186,6 +186,10 @@ export const sfx = {
   },
   alarm: () => [880, 660, 880, 660].forEach((f, i) => engine.tone({ freq: f, type: 'triangle', dur: 0.11, gain: 0.05, delay: i * 0.13, space: 0.15 })),
   recover: () => [660, 990, 1320].forEach((f, i) => engine.tone({ freq: f, dur: 0.14, gain: 0.05, delay: i * 0.07, space: 0.3 })),
+  /** New GlitchTip error: a short digital stutter. */
+  glitch: () => [0, 0.05, 0.1].forEach((d, i) => engine.tone({ freq: 1800 - i * 520, type: 'square', dur: 0.035, gain: 0.035, delay: d, lowpass: 3500 })),
+  /** CrowdSec block at the gate: a quiet zap, mostly into the echo. */
+  zap: () => engine.tone({ freq: 2400, to: 300, type: 'sawtooth', dur: 0.12, gain: 0.025, space: 0.5, lowpass: 2800 }),
   chime: () => {
     engine.tone({ freq: 1568, dur: 0.3, gain: 0.05, space: 0.4 });
     engine.tone({ freq: 2093, dur: 0.3, gain: 0.035, delay: 0.04, space: 0.4 });
@@ -199,6 +203,11 @@ const EVENT_SOUND: Partial<Record<ActivityEvent['kind'], () => void>> = {
   down: sfx.alarm,
   up: sfx.recover,
   'new-node': sfx.chime,
+  fire: sfx.alarm,
+  error: sfx.glitch,
+  ban: sfx.zap,
+  backup: sfx.chime,
+  moved: sfx.launch,
 };
 
 /** Map store transitions to sounds. Returns a cleanup function. */
@@ -245,7 +254,7 @@ export function bindSounds() {
       const seen = new Set(p.events.map((e) => e.id));
       const fresh = s.events.filter((e) => !seen.has(e.id));
       const now = performance.now();
-      const loudest = fresh.find((e) => e.kind === 'down' || e.kind === 'deploy-fail') ?? fresh.find((e) => EVENT_SOUND[e.kind]);
+      const loudest = fresh.find((e) => e.kind === 'down' || e.kind === 'fire' || e.kind === 'deploy-fail') ?? fresh.find((e) => EVENT_SOUND[e.kind]);
       if (loudest && now - lastEvent > 700) {
         lastEvent = now;
         EVENT_SOUND[loudest.kind]?.();

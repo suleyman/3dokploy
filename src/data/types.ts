@@ -4,12 +4,31 @@ export type ServiceStatus = 'running' | 'idle' | 'deploying' | 'error';
 export const DB_KINDS: readonly ServiceKind[] = ['postgres', 'redis', 'mongo', 'mysql', 'mariadb', 'libsql'];
 export const isDb = (kind: ServiceKind) => DB_KINDS.includes(kind);
 
+export interface Backup {
+  /** Backup folder = the backup container's name. */
+  name: string;
+  /** epoch ms of the newest file, 0 when the folder is empty */
+  newest: number;
+  sizeMb: number;
+  files: number;
+  /** The node of the backup container, when it is on the map. */
+  nodeId?: string;
+}
+
 export interface Server {
   id: string;
   name: string;
   host?: string;
   vcpu?: number;
   ramGb?: number;
+  /** Used fraction of the host's disk / memory (optional /api/host). */
+  diskUsed?: number;
+  memUsed?: number;
+  /** CrowdSec (optional): active bans, bans seen today, epoch ms of the newest. */
+  bansActive?: number;
+  bansToday?: number;
+  banAt?: number;
+  backups?: Backup[];
 }
 
 export interface Project {
@@ -59,6 +78,17 @@ export interface Service {
   peerId?: string;
   /** Why the node is in error, when it is more specific than Dokploy's status (e.g. a Kuma monitor). */
   incident?: string;
+  /** Docker container name, when the node is one container. */
+  container?: string;
+  /** GlitchTip (optional): unresolved issues and epoch ms of the newest event. */
+  errors?: number;
+  errorAt?: number;
+  /** Umami (optional): visitors on the site right now. */
+  visitors?: number;
+  /** Kuma (optional): slowest response time of the site's monitors, ms. */
+  latencyMs?: number;
+  /** Days until the first TLS certificate of the service's domains expires. */
+  certDays?: number;
 }
 
 export const STAGES = ['Clone', 'Build', 'Push', 'Start', 'Health'] as const;

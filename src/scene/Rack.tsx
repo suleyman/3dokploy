@@ -8,7 +8,10 @@ import { RACK, TANK, type Layout, type Slot } from '../layout';
 import { matchesSearch, useStore } from '../store';
 import { ACCENT, KIND_COLOR, NEON } from '../theme';
 import { Label } from './Label';
-import { CABINET, CABINET_DOOR, DIM_OPACITY, GEO, TANK_BODY, heatColor, ledMaterial } from './materials';
+import { trouble, type Trouble } from '../trouble';
+
+export { trouble };
+import { CABINET, CABINET_DOOR, DIM_OPACITY, GEO, TANK_BODY, heatColor, ledMaterial, slowness } from './materials';
 
 const LED_ROWS = [0.36, 0.62, 0.88, 1.14, 1.4];
 const BASE_Y = 0.03; // building slab height
@@ -23,8 +26,9 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
   const env = useStore((s) => s.environments[slot.environmentId]);
   const search = useStore((s) => s.search);
   const heatmap = useStore((s) => s.heatmap);
+  const moving = useStore((s) => !!s.moving[id]);
 
-  if (!svc) return null;
+  if (!svc || moving) return null; // a moving rack is drawn on the hand truck until it arrives
   const dim = !matchesSearch(svc, project, search, env);
 
   const over = (e: ThreeEvent<PointerEvent>) => {
@@ -50,25 +54,70 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
       )}
       {svc.status === 'error' && <ErrorBalloon y={unitHeight(svc) + 0.75} />}
       <Burn level={trouble(svc)} y={unitHeight(svc)} />
+      <Sparks at={svc.errorAt} y={unitHeight(svc)} />
+      {!dim && (!!svc.errors || (svc.certDays !== undefined && svc.certDays < 14)) && (
+        <Label position={[0, -0.05, RACK.d / 2 + 0.35]} zIndex={3}>
+          <div className="rack-badges">
+            {!!svc.errors && <span className="badge badge-warn" title={`${svc.errors} unresolved in GlitchTip`}>⚠ {svc.errors}</span>}
+            {svc.certDays !== undefined && svc.certDays < 14 && (
+              <span className={`badge ${svc.certDays < 5 ? 'badge-crit' : 'badge-warn'}`} title="TLS certificate expires soon">
+                TLS {svc.certDays}d
+              </span>
+            )}
+          </div>
+        </Label>
+      )}
     </group>
   );
 });
 
+// ---- sparks: a new GlitchTip event ----------------------------------------------------
+
+const SPARK_N = 14;
+const SPARK_S = 3.5;
+
+/** A burst of sparks when the newest error event of this node changes (never on first sight). */
+const Sparks = memo(function Sparks({ at, y }: { at?: number; y: number }) {
+  const seen = useRef(at);
+  const until = useRef(0);
+  const mesh = useRef<THREE.InstancedMesh>(null);
+  const still = useStore((s) => s.reducedMotion);
+  const dirs = useMemo(
+    () => Array.from({ length: SPARK_N }, () => new THREE.Vector3(Math.random() - 0.5, 0.6 + Math.random(), Math.random() - 0.5).multiplyScalar(1.6)),
+    [],
+  );
+  const tmp = useMemo(() => new THREE.Matrix4(), []);
+  useFrame(({ clock }) => {
+    const m = mesh.current;
+    if (!m) return;
+    const t = clock.elapsedTime;
+    if (at !== seen.current) {
+      if (seen.current !== undefined && (at ?? 0) > seen.current && !still) until.current = t + SPARK_S;
+      seen.current = at;
+    }
+    const left = until.current - t;
+    if (left <= 0) {
+      m.count = 0;
+      return;
+    }
+    const p = ((SPARK_S - left) % 0.9) / 0.9; // three short bursts
+    for (let i = 0; i < SPARK_N; i++) {
+      const d = dirs[i];
+      tmp.makeTranslation(d.x * p, y + 0.1 + d.y * p - 2.2 * p * p, d.z * p + 0.2);
+      m.setMatrixAt(i, tmp);
+    }
+    m.count = SPARK_N;
+    m.instanceMatrix.needsUpdate = true;
+  });
+  return (
+    <instancedMesh ref={mesh} args={[undefined, undefined, SPARK_N]} frustumCulled={false}>
+      <boxGeometry args={[0.04, 0.04, 0.04]} />
+      <meshBasicMaterial color="#ffe08a" toneMapped={false} />
+    </instancedMesh>
+  );
+});
+
 // ---- trouble: smoke under load, fire when down -------------------------------------
-
-const SMOKE_CPU = 0.85; // cores, sustained
-const FIRE_CPU = 2;
-type Trouble = 'smoke' | 'fire' | null;
-
-/** Down (Dokploy, Docker or Kuma) or sustained extreme load → fire; high load → smoke. */
-export function trouble(svc: Service): Trouble {
-  const recent = svc.cpuHist.slice(-3);
-  const cpu = recent.length ? Math.min(...recent) : svc.cpu; // sustained: every recent sample, not one spike
-  const mem = svc.memLimitMb > 0 ? svc.memMb / svc.memLimitMb : 0;
-  if (svc.status === 'error' || cpu >= FIRE_CPU || mem >= 0.95) return 'fire';
-  if (cpu >= SMOKE_CPU || mem >= 0.85) return 'smoke';
-  return null;
-}
 
 const FLAMES = [
   { x: 0, z: 0, s: 1, c: '#ffd23d' },
@@ -140,7 +189,7 @@ export function Cabinet({ svc, dim, heat }: UnitProps) {
   // `transparent` is baked into the shader program, so a dim toggle remounts the material (key).
   const fade = { transparent: dim, opacity: dim ? DIM_OPACITY : 1 };
   const mk = dim ? 'dim' : 'solid';
-  const led = ledMaterial(svc.status, dim);
+  const led = ledMaterial(svc.status, dim, slowness(svc.latencyMs));
   const kind = KIND_COLOR[svc.kind];
 
   return (

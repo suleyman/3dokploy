@@ -11,6 +11,7 @@ import { Agents } from './Agents';
 import { DataFlow } from './DataFlow';
 import { DeployBeams, Pulses } from './Effects';
 import { InfiniteGrid } from './InfiniteGrid';
+import { Movers, Sky, Tour, Vault, Visitors } from './Life';
 import { Building } from './Building';
 import { animateLeds } from './materials';
 import { Markers, ServiceUnit } from './Rack';
@@ -43,19 +44,8 @@ export function Scene() {
     >
       <color attach="background" args={[BG]} />
       <fog attach="fog" args={[BG, 70, 150]} />
-      <hemisphereLight args={['#6f8fd8', '#03060c', 0.85]} />
-      <directionalLight
-        castShadow
-        color="#cfe0ff"
-        position={[-14, 30, 18]}
-        intensity={1.5}
-        shadow-mapSize={[2048, 2048]}
-        shadow-bias={-0.0004}
-        shadow-normalBias={0.03}
-      >
-        <orthographicCamera attach="shadow-camera" args={[-40, 40, 40, -40, 1, 120]} />
-      </directionalLight>
-      <directionalLight color={NEON} position={[24, 10, -24]} intensity={0.5} />
+      <Sky />
+      <Tour />
 
       {/* Local studio env (no network): gives the metal cabinets cyan/violet reflections. */}
       <Environment resolution={128} frames={1}>
@@ -80,6 +70,9 @@ export function Scene() {
           <DeployBeams layout={layout} />
           <Pulses layout={layout} />
           <DataFlow layout={layout} />
+          <Visitors layout={layout} />
+          <Vault layout={layout} />
+          <Movers layout={layout} />
           <CameraRig layout={layout} />
         </group>
       )}

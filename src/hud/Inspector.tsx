@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isDb } from '../data/types';
 import { SAMPLE_SECONDS } from '../data/source';
 import { ago, duration, mb, pct, rate } from '../format';
@@ -150,7 +150,40 @@ export function Inspector() {
         </section>
       )}
 
+      {svc.container && <ContainerLogs container={svc.container} />}
+
       <p className="insp-foot muted small">Read-only · live from Dokploy</p>
     </aside>
+  );
+}
+
+/** The container's last log lines (secrets masked by the server), refreshed every 5 s while open. */
+function ContainerLogs({ container }: { container: string }) {
+  const [state, setState] = useState<{ enabled: boolean; lines: string[]; error?: string } | null>(null);
+  const box = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      const next = await useStore.getState().fetchContainerLogs(container).catch((e: Error) => ({ enabled: true, lines: [], error: e.message }));
+      if (!alive) return;
+      setState(next);
+      if (next.enabled && !next.error) timer = setTimeout(load, 5_000); // stop polling on errors
+    };
+    void load();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [container]);
+  useEffect(() => {
+    if (box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [state]);
+  if (!state?.enabled) return null;
+  return (
+    <section>
+      <h3 className="section-title">Logs · {container}</h3>
+      {state.error ? <p className="muted small">{state.error}</p> : <pre ref={box} className="log-lines">{state.lines.join('\n') || 'No output yet.'}</pre>}
+    </section>
   );
 }

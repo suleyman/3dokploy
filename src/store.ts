@@ -20,13 +20,28 @@ import {
 } from './data/types';
 import { duration } from './format';
 import { computeLayout, structureKey, type Layout } from './layout';
+import { trouble } from './trouble';
 
 export type MenuTab = 'activity' | 'deploys' | 'alerts' | 'services' | 'projects';
 export type CameraCommand = { kind: 'zoomIn' | 'zoomOut' | 'reset' | 'pan'; n: number; dx?: number; dz?: number };
 export type Focus = { kind: 'service' | 'project'; id: string; n: number };
 export type Tone = 'ok' | 'info' | 'warn' | 'crit' | 'muted';
 
-export type EventKind = 'deploy-start' | 'deploy-ok' | 'deploy-fail' | 'down' | 'up' | 'stopped' | 'started' | 'new-node' | 'cpu';
+export type EventKind =
+  | 'deploy-start'
+  | 'deploy-ok'
+  | 'deploy-fail'
+  | 'down'
+  | 'up'
+  | 'stopped'
+  | 'started'
+  | 'new-node'
+  | 'cpu'
+  | 'fire'
+  | 'error'
+  | 'ban'
+  | 'backup'
+  | 'moved';
 
 /** One line in the live activity feed, derived from what changed between two patches. */
 export interface ActivityEvent {
@@ -98,6 +113,10 @@ export interface State extends WorldSlice {
   reducedMotion: boolean;
   /** UI sounds off (remembered per browser). */
   muted: boolean;
+  /** Wall-display mode: the camera tours buildings and stops at incidents. */
+  tour: boolean;
+  /** Nodes being wheeled to another project's building (hidden at their new spot until they arrive). */
+  moving: Rec<true>;
 
   connect(source: DataSource): () => void;
   select(id: string | null): void;
@@ -112,10 +131,13 @@ export interface State extends WorldSlice {
   setSearch(q: string): void;
   toggleHeatmap(): void;
   toggleMute(): void;
+  toggleTour(): void;
+  setMoving(id: string, on: boolean): void;
   /** Opens a header dropdown, or closes it when it's already open (null closes any). */
   toggleMenu(tab: MenuTab | null): void;
   cameraCommand(kind: CameraCommand['kind'], extra?: Pick<CameraCommand, 'dx' | 'dz'>): void;
   fetchLogs(deploymentId: string): Promise<string[]>;
+  fetchContainerLogs(container: string): Promise<{ enabled: boolean; lines: string[]; error?: string }>;
   cartGone(deploymentId: string): void;
 }
 
@@ -180,6 +202,8 @@ export const useStore = create<State>()((set, get) => ({
   hoveredProjectId: null,
   search: '',
   heatmap: false,
+  tour: false,
+  moving: {},
   menu: null,
   seenEventsAt: Date.now(),
   camera: null,
@@ -304,6 +328,17 @@ export const useStore = create<State>()((set, get) => ({
   toggleHeatmap() {
     set((s) => ({ heatmap: !s.heatmap }));
   },
+  toggleTour() {
+    set((s) => ({ tour: !s.tour }));
+  },
+  setMoving(id, on) {
+    set((s) => {
+      const moving = { ...s.moving };
+      if (on) moving[id] = true;
+      else delete moving[id];
+      return { moving };
+    });
+  },
   toggleMute() {
     const muted = !get().muted;
     try {
@@ -323,6 +358,9 @@ export const useStore = create<State>()((set, get) => ({
 
   fetchLogs(deploymentId) {
     return source ? source.logs(deploymentId) : Promise.resolve([]);
+  },
+  fetchContainerLogs(container) {
+    return source?.containerLogs ? source.containerLogs(container) : Promise.resolve({ enabled: false, lines: [] });
   },
   cartGone(deploymentId) {
     set((s) => ({ carts: s.carts.filter((id) => id !== deploymentId) }));
@@ -408,10 +446,27 @@ function diffEvents(s: State, next: WorldSlice, p: WorldPatch): ActivityEvent[] 
                 : null;
       if (t) out.push(ev({ at: now, ...t, detail: where(svc.id), serviceId: svc.id }));
     }
+    if (trouble(svc) === 'fire' && trouble(prev) !== 'fire' && svc.status !== 'error')
+      out.push(ev({ kind: 'fire', at: now, tone: 'crit', text: `${svc.name} is overloaded`, detail: where(svc.id), serviceId: svc.id }));
+    if ((svc.errorAt ?? 0) > (prev.errorAt ?? 0) && prev.errorAt !== undefined)
+      out.push(ev({ kind: 'error', at: now, tone: 'warn', text: `New error in ${svc.name}`, detail: `${svc.errors ?? 0} unresolved in GlitchTip`, serviceId: svc.id }));
+    if (svc.projectId !== prev.projectId)
+      out.push(ev({ kind: 'moved', at: now, tone: 'info', text: `${svc.name} moved`, detail: `to ${where(svc.id) ?? 'another project'}`, serviceId: svc.id }));
     // CPU spikes: once per crossing, at most once a minute per node.
     if (svc.cpu >= CPU_SPIKE && prev.cpu < CPU_SPIKE && now - (spiking.get(svc.id) ?? 0) > 60_000) {
       spiking.set(svc.id, now);
       out.push(ev({ kind: 'cpu', at: now, tone: 'warn', text: `${svc.name} CPU ${Math.round(svc.cpu * 100)}%`, detail: where(svc.id), serviceId: svc.id }));
+    }
+  }
+  for (const sv of p.servers ?? []) {
+    const prev = s.servers[sv.id];
+    if (!prev) continue;
+    if ((sv.banAt ?? 0) > (prev.banAt ?? 0))
+      out.push(ev({ kind: 'ban', at: now, tone: 'muted', text: 'CrowdSec blocked an attacker', detail: `${sv.bansToday ?? 0} today · ${sv.bansActive ?? 0} active` }));
+    const before = new Map((prev.backups ?? []).map((b) => [b.name, b.newest]));
+    for (const b of sv.backups ?? []) {
+      if (b.newest > (before.get(b.name) ?? Infinity))
+        out.push(ev({ kind: 'backup', at: now, tone: 'ok', text: `Backup ${b.name} written`, detail: `${b.sizeMb} MB`, serviceId: b.nodeId }));
     }
   }
   return out;

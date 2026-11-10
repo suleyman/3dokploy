@@ -147,6 +147,9 @@ function useShortcuts() {
         case 'm':
         case 'M':
           return s.toggleMute();
+        case 't':
+        case 'T':
+          return s.toggleTour();
         case 'r':
         case 'R':
         case 'Home':

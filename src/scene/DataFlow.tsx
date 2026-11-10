@@ -168,13 +168,49 @@ export function DataFlow({ layout }: { layout: Layout }) {
   );
 }
 
-/** Where the internet comes in: a neon arch over the avenue. */
+const pctOf = (f?: number) => (f === undefined ? null : Math.round(f * 100));
+const level = (p: number | null) => (p === null ? '' : p >= 95 ? 'is-alert' : p >= 85 ? 'is-warn' : '');
+const BOUNCE_S = 1.4;
+
+/**
+ * Where the internet comes in: a neon arch over the avenue, with the host's disk / memory and,
+ * when CrowdSec is connected, the attackers it turned away (each new ban bounces off the gate).
+ */
 function Gate({ at }: { at: V3 }) {
   const glow = useRef<THREE.MeshBasicMaterial>(null);
+  const attacker = useRef<THREE.Mesh>(null);
   const still = useStore((s) => s.reducedMotion);
-  useFrame(({ clock }) => {
-    if (glow.current && !still) glow.current.opacity = 0.75 + Math.sin(clock.elapsedTime * 2) * 0.2;
+  const local = useStore((s) => s.servers.local);
+  const banAt = local?.banAt;
+  const seenBan = useRef(banAt);
+  const bounce = useRef(-1);
+  useFrame(({ clock }, rawDt) => {
+    const t = clock.elapsedTime;
+    if (banAt !== seenBan.current) {
+      if (seenBan.current !== undefined && !still) bounce.current = 0;
+      seenBan.current = banAt;
+    }
+    const a = attacker.current;
+    if (a) {
+      if (bounce.current < 0) a.visible = false;
+      else {
+        bounce.current += Math.min(rawDt, 0.1);
+        const p = bounce.current / BOUNCE_S;
+        // flies in from the left, hits the arch at p = 0.5, thrown back out
+        const x = p < 0.5 ? -4 + p * 8 : -(p - 0.5) * 7;
+        a.visible = p < 1;
+        a.position.set(x, 0.6 + (p < 0.5 ? 0 : Math.sin((p - 0.5) * Math.PI) * 0.9), 0);
+        if (p >= 1) bounce.current = -1;
+      }
+    }
+    const hit = bounce.current >= 0 && Math.abs(bounce.current / BOUNCE_S - 0.5) < 0.12;
+    if (glow.current) {
+      glow.current.color.set(hit ? '#ff2e55' : NEON);
+      if (!still) glow.current.opacity = hit ? 1 : 0.75 + Math.sin(t * 2) * 0.2;
+    }
   });
+  const disk = pctOf(local?.diskUsed);
+  const mem = pctOf(local?.memUsed);
   const W = 1.5;
   const H = 1.25;
   return (
@@ -193,8 +229,26 @@ function Gate({ at }: { at: V3 }) {
         <planeGeometry args={[W, 0.5]} />
         <meshBasicMaterial color={NEON} toneMapped={false} transparent opacity={0.12} depthWrite={false} />
       </mesh>
+      <mesh ref={attacker} visible={false}>
+        <boxGeometry args={[0.16, 0.16, 0.16]} />
+        <meshBasicMaterial color="#ff2e55" toneMapped={false} />
+      </mesh>
       <Label position={[0, H + 0.45, 0]} zIndex={4}>
-        <div className="bubble">Traefik · Internet</div>
+        <div className="gate-panel">
+          <strong>Traefik · Internet</strong>
+          {local?.bansActive !== undefined && (
+            <span>
+              🛡 {local.bansToday ?? 0} blocked today · {local.bansActive} active
+            </span>
+          )}
+          {(disk !== null || mem !== null) && (
+            <span>
+              {disk !== null && <span className={level(disk)}>Disk {disk}%</span>}
+              {disk !== null && mem !== null && ' · '}
+              {mem !== null && <span className={level(mem)}>RAM {mem}%</span>}
+            </span>
+          )}
+        </div>
       </Label>
     </group>
   );

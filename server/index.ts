@@ -15,6 +15,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
 import { forward, loadTarget } from './dokploy.ts';
+import { backups, certs, crowdsec, glitchtip, host, logs, umami } from './extras.ts';
 import { kuma } from './kuma.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -57,6 +58,13 @@ app.use('*', async (c, next) => {
 });
 
 app.get('/api/kuma', kuma());
+app.get('/api/glitchtip', glitchtip());
+app.get('/api/umami', umami());
+app.get('/api/crowdsec', crowdsec());
+app.get('/api/logs', logs());
+app.get('/api/backups', backups());
+app.get('/api/certs', certs());
+app.get('/api/host', host());
 app.get('/api/:procedure', forward(target));
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 

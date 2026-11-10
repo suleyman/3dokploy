@@ -1819,3 +1819,70 @@ a:focus-visible {
   color: var(--crit-text);
   overflow-wrap: anywhere;
 }
+
+/* ---- rack badges (GlitchTip errors, TLS expiry) and the gate panel ---------------------- */
+.rack-badges {
+  display: flex;
+  gap: 4px;
+  pointer-events: none;
+}
+.badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font: 600 10px/1.5 var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+}
+.badge-warn {
+  color: #ffd23d;
+  border-color: rgba(255, 210, 61, 0.55);
+}
+.badge-crit {
+  color: #ff5470;
+  border-color: rgba(255, 84, 112, 0.6);
+}
+.gate-panel {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+  font: 500 11px/1.4 var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.gate-panel strong {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.gate-panel .is-alert {
+  color: #ff5470;
+}
+.gate-panel .is-warn {
+  color: #ffd23d;
+}
+.vault-panel {
+  display: grid;
+  gap: 1px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+  font: 500 10px/1.45 var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.vault-panel .is-stale {
+  color: #ff5470;
+}
+.log-lines {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font: 11px/1.45 var(--mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  word-break: break-all;
+}

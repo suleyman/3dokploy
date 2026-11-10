@@ -10,7 +10,7 @@ import { STAGES } from '../data/types';
 import { cartRoute, routeBetween, routeFromHome, routeHome, type Layout, type V3 } from '../layout';
 import { useStore } from '../store';
 import { Label } from './Label';
-import { trouble } from './Rack';
+import { trouble } from '../trouble';
 
 const CART_SPEED = 3.2;
 const TECH_SPEED = 2.3;
@@ -19,7 +19,7 @@ const FACE_RACK = Math.PI; // racks face +z, so agents look toward -z
 
 // ---- path following -----------------------------------------------------------------
 
-class Walker {
+export class Walker {
   readonly pos: THREE.Vector3;
   heading = 0;
   private readonly pts: THREE.Vector3[];
@@ -64,7 +64,7 @@ class Walker {
 
 const headingTo = (a: THREE.Vector3, b: THREE.Vector3) => Math.atan2(b.x - a.x, b.z - a.z);
 
-function dampAngle(current: number, target: number, lambda: number, dt: number) {
+export function dampAngle(current: number, target: number, lambda: number, dt: number) {
   const diff = Math.atan2(Math.sin(target - current), Math.cos(target - current));
   return current + diff * (1 - Math.exp(-lambda * dt));
 }
@@ -477,7 +477,7 @@ function Limb({ r, len, color }: { r: number; len: number; color: string }) {
   );
 }
 
-function TechModel({ legL, legR, armL, armR }: { legL: GroupRef; legR: GroupRef; armL: GroupRef; armR: GroupRef }) {
+export function TechModel({ legL, legR, armL, armR }: { legL: GroupRef; legR: GroupRef; armL: GroupRef; armR: GroupRef }) {
   return (
     <group>
       <group ref={legL} position={[-0.075, 0.46, 0]}>

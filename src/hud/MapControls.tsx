@@ -1,9 +1,10 @@
 import { useStore } from '../store';
 import { fullscreenSupported, toggleFullscreen, useFullscreen } from './fullscreen';
-import { ExpandIcon, FlameIcon, MinusIcon, MuteIcon, PlusIcon, ResetIcon, ShrinkIcon, SoundIcon } from './icons';
+import { ExpandIcon, FlameIcon, MinusIcon, MuteIcon, PlusIcon, ResetIcon, ShrinkIcon, SoundIcon, TourIcon } from './icons';
 
 export function MapControls() {
   const heatmap = useStore((s) => s.heatmap);
+  const tour = useStore((s) => s.tour);
   const muted = useStore((s) => s.muted);
   const fullscreen = useFullscreen();
   const cmd = useStore((s) => s.cameraCommand);
@@ -43,6 +44,16 @@ export function MapControls() {
           title="CPU heatmap"
         >
           <FlameIcon />
+        </button>
+        <button
+          type="button"
+          className={`icon-btn ${tour ? 'is-on' : ''}`}
+          onClick={() => useStore.getState().toggleTour()}
+          aria-pressed={tour}
+          aria-label={tour ? 'Stop tour' : 'Tour (wall display)'}
+          title={tour ? 'Stop tour (T)' : 'Tour: fly over buildings, stop at incidents (T)'}
+        >
+          <TourIcon />
         </button>
       </div>
       <div className="rail-group panel">

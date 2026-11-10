@@ -78,6 +78,8 @@ export interface Layout {
   home: V3;
   /** Where public traffic enters the map (Traefik / the internet), at the start of the avenue. */
   gate: V3;
+  /** The backup vault, left of the avenue on the front street. */
+  vault: V3;
   center: V3;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
@@ -197,6 +199,7 @@ export function computeLayout({ projects, environments, services }: Structure): 
   const avenueX = ox - AVENUE;
   const home: V3 = [avenueX + 1.2, 0, streets[gridRows - 1] + 0.9];
   const gate: V3 = [avenueX, 0, streets[gridRows - 1] + 2.6];
+  const vault: V3 = [avenueX - 3.4, 0, streets[gridRows - 1] - 0.9];
   const bounds = { minX: avenueX - 1, maxX: ox + totalW, minZ: oz, maxZ: oz + totalD };
 
   return {
@@ -206,6 +209,7 @@ export function computeLayout({ projects, environments, services }: Structure): 
     avenueX,
     home,
     gate,
+    vault,
     center: [(bounds.minX + bounds.maxX) / 2, 0, (bounds.minZ + bounds.maxZ) / 2],
     bounds,
   };
@@ -268,6 +272,30 @@ export function routeFromGate(layout: Layout, serviceId: string): V3[] | null {
   if (!a || !b) return null;
   const corner: V3 = [layout.avenueX, 0, layout.streets[frontRow(layout)]];
   return [layout.gate, corner, ...streetLink(layout, frontRow(layout), b.gridRow, a[0]), ...a.slice(1)];
+}
+
+/** Backup truck: out of the building's door, along the streets and the avenue, to the vault's door. */
+export function routeToVault(layout: Layout, serviceId: string): V3[] | null {
+  const a = approach(layout, serviceId);
+  const b = buildingOf(layout, serviceId);
+  if (!a || !b) return null;
+  const front = layout.streets[frontRow(layout)];
+  return [a[1], a[0], [layout.avenueX, 0, layout.streets[b.gridRow]], [layout.avenueX, 0, front], [layout.vault[0] + 1.1, 0, front], [layout.vault[0] + 1.1, 0, layout.vault[2]]];
+}
+
+/**
+ * A rack moved to another project: wheeled out of the old project's building (or in from the gate
+ * when that building is gone), along the streets, into the new building to its slot.
+ */
+export function routeMove(layout: Layout, fromProjectId: string, toServiceId: string): V3[] | null {
+  const to = approach(layout, toServiceId);
+  const tb = buildingOf(layout, toServiceId);
+  if (!to || !tb) return null;
+  const fb = layout.buildings.find((x) => x.projectId === fromProjectId);
+  if (!fb) return routeFromGate(layout, toServiceId);
+  const inside: V3 = [fb.doorX, 0, fb.z + fb.d - WALL.t - 0.5];
+  const out: V3 = [fb.doorX, 0, layout.streets[fb.gridRow]];
+  return [inside, out, ...streetLink(layout, fb.gridRow, tb.gridRow, to[0]), ...to.slice(1)];
 }
 
 /** From one rack to another; leaves through the door first when the target is in another building. */

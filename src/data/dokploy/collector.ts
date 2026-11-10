@@ -17,8 +17,10 @@ import type { Alert, Deployment, Server, Service, ServiceStatus, SourceStatus, W
 import {
   UpstreamError,
   belongsTo,
+  fetchCerts,
   fetchComposeContainers,
   fetchContainerStats,
+  fetchExtra,
   fetchDeployments,
   fetchDetails,
   fetchHost,
@@ -32,6 +34,7 @@ import {
   type ComposeContainer,
   type ContainerStat,
   type Details,
+  type Extras,
   type KumaState,
   type Structure,
   type Transport,
@@ -64,6 +67,16 @@ const NET_WINDOW_MS = 5 * 60_000;
 const GRACE_MS = 60_000;
 
 type NetSample = { at: number; rx: number; tx: number };
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+};
+/** "www.example.com" and "example.com" are the same site for visitor counts. */
+const bareHost = (h: string) => h.toLowerCase().replace(/^www\./, '');
 
 /** Id of the node for one container of a service; see `compose()`. */
 export const containerNodeId = (serviceId: string, key: string) => `${serviceId}::${key}`;
@@ -118,6 +131,9 @@ export class Collector {
   /** Container keys per service id (main container first, then by name, so node order is stable). */
   private containerKeys = new Map<string, string[]>();
   private kuma: KumaState | null = null;
+  private extras: Extras = {};
+  /** TLS days left per domain host (null: no certificate / unreachable). */
+  private certs = new Map<string, number | null>();
   /** Last time each container node was seen, so a container missing for a moment keeps its rack. */
   private seen = new Map<string, number>();
   /** Compose stacks' containers by service id, from Dokploy's label match. */
@@ -142,7 +158,7 @@ export class Collector {
     return this.once('bootstrap', async () => {
       await Promise.allSettled([this.refreshStructure(), this.refreshDeployments()]);
       this.commit();
-      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
+      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras(), this.refreshDetails().then(() => this.refreshCerts()), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
         this.commit(),
       );
     });
@@ -152,8 +168,8 @@ export class Collector {
     return this.once('tick', async () => {
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
-      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma());
-      if (n % 60 === 0) jobs.push(this.refreshDetails());
+      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras());
+      if (n % 60 === 0) jobs.push(this.refreshDetails().then(() => this.refreshCerts()));
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
       this.commit();
@@ -267,16 +283,68 @@ export class Collector {
   private kumaDown() {
     const down = new Map<string, string[]>();
     for (const m of this.kuma?.monitors ?? []) {
-      if (m.status !== 0 || !m.url) continue;
-      let host: string;
-      try {
-        host = new URL(m.url).host;
-      } catch {
-        continue;
-      }
-      down.set(host, [...(down.get(host) ?? []), m.name]);
+      const host = m.status === 0 && m.url ? hostOf(m.url) : null;
+      if (host) down.set(host, [...(down.get(host) ?? []), m.name]);
     }
     return down;
+  }
+
+  /** Slowest response time per URL host across Kuma monitors. */
+  private kumaLatency() {
+    const out = new Map<string, number>();
+    for (const m of this.kuma?.monitors ?? []) {
+      if (m.responseMs === undefined || !m.url) continue;
+      const host = hostOf(m.url);
+      if (host) out.set(host, Math.max(out.get(host) ?? 0, m.responseMs));
+    }
+    return out;
+  }
+
+  /** The optional integrations of the 3Dokploy server; one that answers "not configured" isn't asked again. */
+  private async refreshExtras() {
+    const names = ['glitchtip', 'umami', 'crowdsec', 'host', 'backups'] as const;
+    await Promise.allSettled(
+      names.map(async (name) => {
+        if (this.extras[name]?.enabled === false) return;
+        try {
+          const next = await fetchExtra(this.t, name);
+          (this.extras as Record<string, unknown>)[name] = next;
+          if ('error' in next && next.error) this.warn(name, new Error(next.error));
+        } catch (e) {
+          this.warn(name, e);
+        }
+      }),
+    );
+  }
+
+  private async refreshCerts() {
+    const hosts = [...new Set([...this.details.values()].flatMap((d) => d.domains))];
+    if (!hosts.length) return;
+    try {
+      const { certs } = await fetchCerts(this.t, hosts);
+      for (const [h, days] of Object.entries(certs)) this.certs.set(h, days);
+    } catch (e) {
+      this.warn('certs', e);
+    }
+  }
+
+  /**
+   * GlitchTip projects → nodes: a container of that name (maklerfotos-worker), else the service of
+   * that name (kinderbuch), else the service named like its first part (broccoli-web → broccoli).
+   */
+  private attachErrors(nodes: Service[], services: Service[]) {
+    const projects = this.extras.glitchtip?.projects ?? [];
+    if (!projects.length) return;
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const byContainer = new Map(nodes.filter((n) => n.container).map((n) => [n.container!.toLowerCase(), n]));
+    const byName = new Map(services.map((s) => [s.name.toLowerCase(), byId.get(s.id)]));
+    for (const p of projects) {
+      const slug = p.project.toLowerCase();
+      const node = byContainer.get(slug) ?? byName.get(slug) ?? byName.get(slug.split('-')[0]);
+      if (!node) continue;
+      node.errors = (node.errors ?? 0) + p.unresolved;
+      node.errorAt = Math.max(node.errorAt ?? 0, p.lastSeen);
+    }
   }
 
   private async refreshStats() {
@@ -375,14 +443,25 @@ export class Collector {
     }
 
     const kumaDown = this.kumaDown();
+    const latency = this.kumaLatency();
+    const visitors = new Map((this.extras.umami?.sites ?? []).map((x) => [bareHost(x.domain), x.visitors]));
     const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
+      const domains = det?.domains ?? [];
       // A Kuma monitor on one of the service's domains is down: Docker may say "running", users don't.
-      const failing = svc.status === 'deploying' ? [] : (det?.domains ?? []).flatMap((d) => kumaDown.get(d) ?? []);
+      const failing = svc.status === 'deploying' ? [] : domains.flatMap((d) => kumaDown.get(d) ?? []);
+      const ms = domains.map((d) => latency.get(d)).filter((x): x is number => x !== undefined);
+      const seen = domains.map((d) => visitors.get(bareHost(d))).filter((x): x is number => x !== undefined);
+      const days = domains.map((d) => this.certs.get(d)).filter((x): x is number => typeof x === 'number');
+      const single = this.containerKeys.get(svc.id);
       const node: Service = {
         ...svc,
         ...(failing.length ? { status: 'error' as const, incident: `Kuma: ${failing.join(', ')} down` } : {}),
+        container: single?.length === 1 ? single[0] : undefined,
+        latencyMs: ms.length ? Math.max(...ms) : undefined,
+        visitors: seen.length ? seen.reduce((a, b) => a + b, 0) : undefined,
+        certDays: days.length ? Math.min(...days) : undefined,
         domain: det?.domain,
         source: det?.source,
         replicas: det?.replicas ?? svc.replicas,
@@ -415,7 +494,12 @@ export class Collector {
           id: i === 0 ? svc.id : containerNodeId(svc.id, key),
           name: containerLabel(key, svc.appName ?? ''),
           description: `${svc.name} · container ${key}`,
+          container: key,
           domain: i === 0 ? node.domain : undefined,
+          // the site's numbers belong to the app, not to its database
+          latencyMs: i === 0 ? node.latencyMs : undefined,
+          visitors: i === 0 ? node.visitors : undefined,
+          certDays: i === 0 ? node.certDays : undefined,
           replicas: 1,
           memLimitMb: cm?.memLimitMb || node.memLimitMb,
           cpu: cm?.cpu ?? 0,
@@ -427,9 +511,22 @@ export class Collector {
       });
     });
 
+    this.attachErrors(services, s.services);
+    const byContainer = new Map(services.filter((x) => x.container).map((x) => [x.container!, x.id]));
+    const { host, crowdsec, backups } = this.extras;
     const servers = s.servers.map((sv) =>
       sv.id === 'local'
-        ? { ...sv, name: this.host.hostname ?? sv.name, host: this.host.host, vcpu: this.host.vcpu, ramGb: this.host.ramGb }
+        ? {
+            ...sv,
+            name: this.host.hostname ?? sv.name,
+            host: this.host.host,
+            vcpu: this.host.vcpu,
+            ramGb: this.host.ramGb,
+            diskUsed: host?.diskUsed ?? undefined,
+            memUsed: host?.memUsed ?? undefined,
+            ...(crowdsec?.enabled && !crowdsec.error ? { bansActive: crowdsec.active, bansToday: crowdsec.today, banAt: crowdsec.lastAt || undefined } : {}),
+            backups: backups?.enabled ? backups.backups.map((b) => ({ ...b, nodeId: byContainer.get(b.name) })) : undefined,
+          }
         : sv,
     );
 
