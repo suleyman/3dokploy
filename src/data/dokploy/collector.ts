@@ -67,6 +67,12 @@ export const containerNodeId = (serviceId: string, key: string) => `${serviceId}
 /** Swarm tasks are named `app.1.<task id>`; drop the task id so the node survives redeploys. */
 const containerKey = (name: string) => name.replace(/^(.+\.\d+)\.[a-z0-9]{10,}$/, '$1');
 
+/** Main containers first (they take the service id, so deploy carts go there), helpers last. */
+const MAIN = /(^|[-_.])(web|app|api|server|frontend)([-_.]|$)/i;
+const HELPER = /(^|[-_.])(db|postgres|mysql|mariadb|mongo|redis|valkey|broker|backup|cron|worker|vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
+const rank = (key: string) => (MAIN.test(key) ? 0 : HELPER.test(key) ? 2 : 1);
+const byRole = (a: string, b: string) => rank(a) - rank(b) || a.localeCompare(b);
+
 /** A container's node status; a deploy in progress wins while the container itself is fine. */
 function containerStatus(c: ComposeContainer, service: ServiceStatus): ServiceStatus {
   if (c.state === 'restarting' || c.state === 'dead' || /unhealthy/i.test(c.status)) return 'error';
@@ -102,7 +108,7 @@ export class Collector {
   private deploys: MappedDeploy[] = [];
   private details = new Map<string, Details>();
   private metrics = new Map<string, Metric>();
-  /** Container keys per service id, from the latest stats (sorted, so node order is stable). */
+  /** Container keys per service id (main container first, then by name, so node order is stable). */
   private containerKeys = new Map<string, string[]>();
   /** Compose stacks' containers by service id, from Dokploy's label match. */
   private composeContainers = new Map<string, ComposeContainer[]>();
@@ -247,7 +253,7 @@ export class Collector {
       const names = new Set(listed?.map((c) => c.name));
       const own = stats.filter((c) => names.has(c.name) || belongsTo(c.name, svc.appName!));
       this.measure(svc.id, own, now);
-      const keys = (listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))]).sort();
+      const keys = (listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))]).sort(byRole);
       this.containerKeys.set(svc.id, keys);
       for (const key of keys) this.measure(containerNodeId(svc.id, key), own.filter((c) => containerKey(c.name) === key), now);
     }
