@@ -7,6 +7,7 @@
  *   deployment.allCentralized         → every deployment (title = commit message, status, timings)
  *   deployment.readLogs               → deployment log tail (stages are inferred from it)
  *   swarm.getContainerStats           → `docker stats` snapshot (CPU %, memory, network I/O)
+ *   docker.getContainersByAppNameMatch → a compose stack's containers (by compose project label)
  *   swarm.getNodes / getNodeInfo      → host CPU / memory
  *   application.one, compose.one, <db>.one → domains, source, replicas, limits
  *
@@ -300,6 +301,20 @@ export async function fetchContainerStats(t: Transport): Promise<ContainerStat[]
 }
 
 /** Containers that belong to a Dokploy service: swarm tasks (`app.1.xyz`), compose (`app-web-1`) or stacks (`app_web.1`). */
+export interface ComposeContainer {
+  name: string;
+  /** docker state: running, exited, restarting, paused, created, dead */
+  state: string;
+  /** docker status text, e.g. "Up 9 hours (healthy)" */
+  status: string;
+}
+
+/** Containers of one compose stack, matched by label, so fixed `container_name`s are found too. */
+export async function fetchComposeContainers(t: Transport, appName: string): Promise<ComposeContainer[]> {
+  const raw = await get<Raw[]>(t, `/api/docker.getContainersByAppNameMatch?appName=${q(appName)}&appType=docker-compose`);
+  return raw.map((c) => ({ name: String(c.name ?? ''), state: String(c.state ?? ''), status: String(c.status ?? '') })).filter((c) => c.name);
+}
+
 export const belongsTo = (container: string, appName: string) =>
   container === appName || container.startsWith(`${appName}.`) || container.startsWith(`${appName}-`) || container.startsWith(`${appName}_`);
 
