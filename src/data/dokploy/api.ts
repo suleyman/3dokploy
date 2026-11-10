@@ -195,6 +195,8 @@ export function normalize(rawProjects: Raw[]): Structure {
 
 export interface Details {
   domain?: string;
+  /** Every domain host of the service (the first one is `domain`). */
+  domains: string[];
   source?: string;
   replicas?: number;
   memLimitMb?: number;
@@ -231,6 +233,7 @@ export async function fetchDetails(t: Transport, kind: ServiceKind, id: string):
   const memBytes = Number(s.memoryLimit);
   return {
     domain: str(domains[0]?.host),
+    domains: domains.map((d) => str(d.host)).filter((h): h is string => !!h),
     source: sourceOf(s),
     replicas: typeof s.replicas === 'number' && s.replicas > 0 ? s.replicas : undefined,
     memLimitMb: Number.isFinite(memBytes) && memBytes > 0 ? Math.round(memBytes / 1048576) : undefined,
@@ -314,6 +317,15 @@ export async function fetchComposeContainers(t: Transport, appName: string): Pro
   const raw = await get<Raw[]>(t, `/api/docker.getContainersByAppNameMatch?appName=${q(appName)}&appType=docker-compose`);
   return raw.map((c) => ({ name: String(c.name ?? ''), state: String(c.state ?? ''), status: String(c.status ?? '') })).filter((c) => c.name);
 }
+
+export interface KumaState {
+  enabled: boolean;
+  monitors: { name: string; type: string; url?: string; status: number }[];
+  error?: string;
+}
+
+/** Uptime Kuma monitor states via the 3Dokploy server (empty unless KUMA_URL/KUMA_API_KEY are set). */
+export const fetchKuma = (t: Transport) => get<KumaState>(t, '/api/kuma');
 
 export const belongsTo = (container: string, appName: string) =>
   container === appName || container.startsWith(`${appName}.`) || container.startsWith(`${appName}-`) || container.startsWith(`${appName}_`);

@@ -49,6 +49,81 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
         <Cabinet svc={svc} dim={dim} heat={heatmap} />
       )}
       {svc.status === 'error' && <ErrorBalloon y={unitHeight(svc) + 0.75} />}
+      <Burn level={trouble(svc)} y={unitHeight(svc)} />
+    </group>
+  );
+});
+
+// ---- trouble: smoke under load, fire when down -------------------------------------
+
+const SMOKE_CPU = 0.85; // cores, sustained
+const FIRE_CPU = 2;
+type Trouble = 'smoke' | 'fire' | null;
+
+/** Down (Dokploy, Docker or Kuma) or sustained extreme load → fire; high load → smoke. */
+export function trouble(svc: Service): Trouble {
+  const recent = svc.cpuHist.slice(-3);
+  const cpu = recent.length ? Math.min(...recent) : svc.cpu; // sustained: every recent sample, not one spike
+  const mem = svc.memLimitMb > 0 ? svc.memMb / svc.memLimitMb : 0;
+  if (svc.status === 'error' || cpu >= FIRE_CPU || mem >= 0.95) return 'fire';
+  if (cpu >= SMOKE_CPU || mem >= 0.85) return 'smoke';
+  return null;
+}
+
+const FLAMES = [
+  { x: 0, z: 0, s: 1, c: '#ffd23d' },
+  { x: -0.16, z: 0.05, s: 0.75, c: '#ff8a1f' },
+  { x: 0.15, z: -0.04, s: 0.8, c: '#ff6a1a' },
+  { x: 0.05, z: 0.12, s: 0.6, c: '#ff3d2e' },
+  { x: -0.06, z: -0.12, s: 0.65, c: '#ff9d2b' },
+];
+const PUFFS = 7;
+
+const Burn = memo(function Burn({ level, y }: { level: Trouble; y: number }) {
+  const flames = useRef<(THREE.Mesh | null)[]>([]);
+  const puffs = useRef<(THREE.Mesh | null)[]>([]);
+  const light = useRef<THREE.PointLight>(null);
+  const still = useStore((s) => s.reducedMotion);
+  const seed = useMemo(() => Math.random() * 100, []);
+
+  useFrame(({ clock }) => {
+    if (!level) return;
+    const t = clock.elapsedTime + seed;
+    flames.current.forEach((m, i) => {
+      if (!m) return;
+      const f = still ? 1 : 0.75 + Math.abs(Math.sin(t * (7 + i * 1.7)) * 0.35) + Math.sin(t * 13 + i) * 0.08;
+      m.scale.set(FLAMES[i].s, FLAMES[i].s * f, FLAMES[i].s);
+    });
+    if (light.current) light.current.intensity = still ? 2.2 : 1.8 + Math.sin(t * 17) * 0.5 + Math.sin(t * 7.3) * 0.4;
+    puffs.current.forEach((m, i) => {
+      if (!m) return;
+      const p = still ? i / PUFFS : (t * 0.45 + i / PUFFS) % 1; // 0 → 1 over the puff's life
+      m.position.set(Math.sin(i * 2.4 + t * 0.3) * 0.18 * p, 0.25 + p * 1.6, Math.cos(i * 1.7) * 0.12 * p);
+      m.scale.setScalar(0.12 + p * 0.32);
+      (m.material as THREE.MeshBasicMaterial).opacity = (level === 'fire' ? 0.5 : 0.35) * (1 - p) * Math.min(1, p * 5);
+    });
+  });
+
+  if (!level) return null;
+  return (
+    <group position-y={y}>
+      {level === 'fire' && (
+        <>
+          {FLAMES.map((f, i) => (
+            <mesh key={i} ref={(m) => (flames.current[i] = m)} position={[f.x, 0.22 * f.s, f.z]}>
+              <coneGeometry args={[0.14, 0.5, 10, 1, true]} />
+              <meshBasicMaterial color={f.c} toneMapped={false} transparent opacity={0.85} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+            </mesh>
+          ))}
+          <pointLight ref={light} color="#ff7a1a" intensity={2} distance={3.2} position={[0, 0.4, 0.3]} />
+        </>
+      )}
+      {Array.from({ length: PUFFS }, (_, i) => (
+        <mesh key={i} ref={(m) => (puffs.current[i] = m)}>
+          <sphereGeometry args={[1, 10, 8]} />
+          <meshBasicMaterial color={level === 'fire' ? '#2a2a33' : '#8a93a6'} transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ))}
     </group>
   );
 });

@@ -22,6 +22,7 @@ import {
   fetchDeployments,
   fetchDetails,
   fetchHost,
+  fetchKuma,
   fetchLogLines,
   fetchServiceDeployments,
   fetchStructure,
@@ -31,6 +32,7 @@ import {
   type ComposeContainer,
   type ContainerStat,
   type Details,
+  type KumaState,
   type Structure,
   type Transport,
 } from './api';
@@ -70,6 +72,8 @@ const containerKey = (name: string) => name.replace(/^(.+\.\d+)\.[a-z0-9]{10,}$/
 /** Main containers first (they take the service id, so deploy carts go there), helpers last. */
 const MAIN = /(^|[-_.])(web|app|api|server|frontend)([-_.]|$)/i;
 const HELPER = /(^|[-_.])(db|postgres|mysql|mariadb|mongo|redis|valkey|broker|backup|cron|worker|vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
+/** Helpers that talk to the internet, not to their app: their traffic still comes from the gate. */
+const INTERNET = /(^|[-_.])(vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
 const rank = (key: string) => (MAIN.test(key) ? 0 : HELPER.test(key) ? 2 : 1);
 const byRole = (a: string, b: string) => rank(a) - rank(b) || a.localeCompare(b);
 
@@ -110,6 +114,7 @@ export class Collector {
   private metrics = new Map<string, Metric>();
   /** Container keys per service id (main container first, then by name, so node order is stable). */
   private containerKeys = new Map<string, string[]>();
+  private kuma: KumaState | null = null;
   /** Compose stacks' containers by service id, from Dokploy's label match. */
   private composeContainers = new Map<string, ComposeContainer[]>();
   private netHistory = new Map<string, NetSample[]>();
@@ -132,7 +137,7 @@ export class Collector {
     return this.once('bootstrap', async () => {
       await Promise.allSettled([this.refreshStructure(), this.refreshDeployments()]);
       this.commit();
-      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
+      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
         this.commit(),
       );
     });
@@ -142,7 +147,7 @@ export class Collector {
     return this.once('tick', async () => {
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
-      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()));
+      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma());
       if (n % 60 === 0) jobs.push(this.refreshDetails());
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
@@ -243,6 +248,32 @@ export class Collector {
     });
   }
 
+  private async refreshKuma() {
+    if (this.kuma && !this.kuma.enabled) return; // not configured: ask once, then stay quiet
+    try {
+      this.kuma = await fetchKuma(this.t);
+      if (this.kuma.error) this.warn('kuma', new Error(this.kuma.error));
+    } catch (e) {
+      this.warn('kuma', e);
+    }
+  }
+
+  /** Kuma monitors that are down, keyed by the host of their URL. */
+  private kumaDown() {
+    const down = new Map<string, string[]>();
+    for (const m of this.kuma?.monitors ?? []) {
+      if (m.status !== 0 || !m.url) continue;
+      let host: string;
+      try {
+        host = new URL(m.url).host;
+      } catch {
+        continue;
+      }
+      down.set(host, [...(down.get(host) ?? []), m.name]);
+    }
+    return down;
+  }
+
   private async refreshStats() {
     if (!this.structure) return;
     let stats: ContainerStat[];
@@ -332,11 +363,15 @@ export class Collector {
       if (d.status === 'success' && at > (lastDeploy.get(d.serviceId) ?? 0)) lastDeploy.set(d.serviceId, at);
     }
 
+    const kumaDown = this.kumaDown();
     const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
+      // A Kuma monitor on one of the service's domains is down: Docker may say "running", users don't.
+      const failing = svc.status === 'deploying' ? [] : (det?.domains ?? []).flatMap((d) => kumaDown.get(d) ?? []);
       const node: Service = {
         ...svc,
+        ...(failing.length ? { status: 'error' as const, incident: `Kuma: ${failing.join(', ')} down` } : {}),
         domain: det?.domain,
         source: det?.source,
         replicas: det?.replicas ?? svc.replicas,
@@ -354,9 +389,12 @@ export class Collector {
       return keys.map((key, i) => {
         const cm = this.metrics.get(containerNodeId(svc.id, key));
         const c = listed.get(key);
+        const status = c ? containerStatus(c, i === 0 ? node.status : svc.status) : node.status;
         return {
           ...node,
-          status: c ? containerStatus(c, node.status) : node.status,
+          status,
+          incident: i === 0 ? node.incident : status === 'error' && c ? `${key}: ${c.status}` : undefined,
+          peerId: i > 0 && HELPER.test(key) && !INTERNET.test(key) ? svc.id : undefined,
           id: i === 0 ? svc.id : containerNodeId(svc.id, key),
           name: containerLabel(key, svc.appName ?? ''),
           description: `${svc.name} · container ${key}`,
@@ -402,7 +440,7 @@ export class Collector {
           serviceId: svc.id,
           severity: 'critical',
           title: 'Node in error state',
-          message: `Dokploy reports ${svc.name} as errored`,
+          message: svc.incident ?? `Dokploy reports ${svc.name} as errored`,
           createdAt: this.errorSince.get(id)!,
         });
       } else if (this.errorSince.has(id)) {

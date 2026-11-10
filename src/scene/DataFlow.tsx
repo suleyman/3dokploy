@@ -1,14 +1,19 @@
 /**
- * Network traffic as packets: every node's measured rx/tx turns into small glowing cubes that
- * travel street → door → spine → rack (received, cyan) or back out (sent, violet).
- * Density grows with the log of the throughput. One InstancedMesh draws all of them.
+ * Network traffic as packets: every node's measured rx/tx turns into small glowing cubes,
+ * received in cyan, sent in violet. Density grows with the log of the throughput. One
+ * InstancedMesh draws all of them.
+ *
+ * Public traffic enters at the Traefik gate and travels avenue → street → door → spine → rack.
+ * A helper container (database, cache, broker…) mostly talks to its own app, so its packets run
+ * inside the building between the app's rack and its own instead.
  */
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { approach, type Layout } from '../layout';
+import { approach, routeBetween, routeFromGate, type Layout, type V3 } from '../layout';
 import { matchesSearch, useStore } from '../store';
 import { ACCENT, NEON } from '../theme';
+import { Label } from './Label';
 
 const CAPACITY = 900;
 const SPEED = 3.6;
@@ -54,20 +59,27 @@ export function DataFlow({ layout }: { layout: Layout }) {
   const environments = useStore((s) => s.environments);
   const search = useStore((s) => s.search);
 
-  // One inbound route per node: from up the street, through the door, down the spine to the rack.
+  // "node>peer" pairs, so routes are only rebuilt when the pairing changes, not on every stats tick.
+  const peers = Object.values(services)
+    .filter((s) => s.peerId)
+    .map((s) => `${s.id}>${s.peerId}`)
+    .sort()
+    .join('|');
+
+  // One inbound route per node: from its app's rack for helpers, otherwise from the gate.
   const paths = useMemo(() => {
+    const peerOf = new Map(peers ? peers.split('|').map((p) => p.split('>') as [string, string]) : []);
     const out = new Map<string, Path>();
     for (const id of Object.keys(layout.slots)) {
-      const a = approach(layout, id);
-      if (!a) continue;
       const slot = layout.slots[id];
-      const pts = [[a[0][0] - 3.2, 0, a[0][2]] as const, ...a, [slot.pos[0], 0, slot.pos[2] + 0.25] as const].map(
-        ([x, , z]) => new THREE.Vector3(x, 0, z),
-      );
+      const peer = peerOf.get(id);
+      const route: V3[] | null = (peer && layout.slots[peer] && routeBetween(layout, peer, id, 0)) || routeFromGate(layout, id) || approach(layout, id);
+      if (!route) continue;
+      const pts = [...route, [slot.pos[0], 0, slot.pos[2] + 0.25] as V3].map(([x, , z]) => new THREE.Vector3(x, 0, z));
       out.set(id, makePath(pts));
     }
     return out;
-  }, [layout]);
+  }, [layout, peers]);
 
   // Current spawn rates, read by the frame loop without re-rendering it.
   const rates = useRef(new Map<string, { rx: number; tx: number }>());
@@ -148,5 +160,42 @@ export function DataFlow({ layout }: { layout: Layout }) {
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
   });
 
-  return <instancedMesh ref={mesh} args={[geometry, material, CAPACITY]} frustumCulled={false} />;
+  return (
+    <>
+      <instancedMesh ref={mesh} args={[geometry, material, CAPACITY]} frustumCulled={false} />
+      <Gate at={layout.gate} />
+    </>
+  );
+}
+
+/** Where the internet comes in: a neon arch over the avenue. */
+function Gate({ at }: { at: V3 }) {
+  const glow = useRef<THREE.MeshBasicMaterial>(null);
+  const still = useStore((s) => s.reducedMotion);
+  useFrame(({ clock }) => {
+    if (glow.current && !still) glow.current.opacity = 0.75 + Math.sin(clock.elapsedTime * 2) * 0.2;
+  });
+  const W = 1.5;
+  const H = 1.25;
+  return (
+    <group position={at}>
+      {[-W / 2, W / 2].map((x) => (
+        <mesh key={x} position={[x, H / 2, 0]}>
+          <boxGeometry args={[0.1, H, 0.1]} />
+          <meshStandardMaterial color="#0d1a2b" emissive={NEON} emissiveIntensity={0.25} />
+        </mesh>
+      ))}
+      <mesh position={[0, H, 0]}>
+        <boxGeometry args={[W + 0.1, 0.1, 0.1]} />
+        <meshBasicMaterial ref={glow} color={NEON} toneMapped={false} transparent opacity={0.9} />
+      </mesh>
+      <mesh position={[0, 0.005, 0]} rotation-x={-Math.PI / 2}>
+        <planeGeometry args={[W, 0.5]} />
+        <meshBasicMaterial color={NEON} toneMapped={false} transparent opacity={0.12} depthWrite={false} />
+      </mesh>
+      <Label position={[0, H + 0.45, 0]} zIndex={4}>
+        <div className="bubble">Traefik · Internet</div>
+      </Label>
+    </group>
+  );
 }

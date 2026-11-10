@@ -76,6 +76,8 @@ export interface Layout {
   avenueX: number;
   /** Technician's waiting spot, on the front street. */
   home: V3;
+  /** Where public traffic enters the map (Traefik / the internet), at the start of the avenue. */
+  gate: V3;
   center: V3;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
@@ -194,6 +196,7 @@ export function computeLayout({ projects, environments, services }: Structure): 
   const streets = front.map((z) => oz + z + STREET);
   const avenueX = ox - AVENUE;
   const home: V3 = [avenueX + 1.2, 0, streets[gridRows - 1] + 0.9];
+  const gate: V3 = [avenueX, 0, streets[gridRows - 1] + 2.6];
   const bounds = { minX: avenueX - 1, maxX: ox + totalW, minZ: oz, maxZ: oz + totalD };
 
   return {
@@ -202,6 +205,7 @@ export function computeLayout({ projects, environments, services }: Structure): 
     streets,
     avenueX,
     home,
+    gate,
     center: [(bounds.minX + bounds.maxX) / 2, 0, (bounds.minZ + bounds.maxZ) / 2],
     bounds,
   };
@@ -255,6 +259,15 @@ export function routeFromHome(layout: Layout, serviceId: string, dx: number): V3
   const b = buildingOf(layout, serviceId);
   if (!a || !b) return null;
   return [layout.home, ...shift([...streetLink(layout, frontRow(layout), b.gridRow, a[0]), ...a.slice(1)], dx)];
+}
+
+/** Public traffic: in through the gate, up the avenue, along the street, into the building. */
+export function routeFromGate(layout: Layout, serviceId: string): V3[] | null {
+  const a = approach(layout, serviceId);
+  const b = buildingOf(layout, serviceId);
+  if (!a || !b) return null;
+  const corner: V3 = [layout.avenueX, 0, layout.streets[frontRow(layout)]];
+  return [layout.gate, corner, ...streetLink(layout, frontRow(layout), b.gridRow, a[0]), ...a.slice(1)];
 }
 
 /** From one rack to another; leaves through the door first when the target is in another building. */

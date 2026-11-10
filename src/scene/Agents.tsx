@@ -71,8 +71,8 @@ function dampAngle(current: number, target: number, lambda: number, dt: number) 
 // ---- carts ----------------------------------------------------------------------------
 
 /**
- * Deploy carts, plus the technician: he walks to nodes in error and leaves when Dokploy reports
- * them healthy again.
+ * Deploy carts, plus the technician: he walks to nodes in error and stays until they are healthy
+ * again; otherwise he patrols, checking busy and freshly deployed racks first.
  */
 export function Agents({ layout }: { layout: Layout }) {
   const carts = useStore((s) => s.carts);
@@ -222,7 +222,20 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
 
 // ---- technician ---------------------------------------------------------------------
 
-type TechPhase = 'idle' | 'walk' | 'work' | 'home';
+type TechPhase = 'idle' | 'walk' | 'work' | 'home' | 'patrol' | 'inspect';
+
+const PATROL_ROUNDS = 5; // racks checked before a break at home
+const REST_S = 8;
+
+/** Picks the next rack to check: weighted towards CPU load and an active deploy. */
+function pickPatrol(services: Record<string, { cpu: number; status: string }>, slots: Layout['slots'], not: string | null) {
+  const ids = Object.keys(slots).filter((id) => id !== not && services[id]);
+  if (!ids.length) return null;
+  const weight = (id: string) => 1 + Math.min(services[id].cpu, 2) * 4 + (services[id].status === 'deploying' ? 6 : 0);
+  let r = Math.random() * ids.reduce((a, id) => a + weight(id), 0);
+  for (const id of ids) if ((r -= weight(id)) <= 0) return id;
+  return ids[ids.length - 1];
+}
 
 function Technician({ layout }: { layout: Layout }) {
   const alerts = useStore((s) => s.alerts);
@@ -239,6 +252,9 @@ function Technician({ layout }: { layout: Layout }) {
   }, [alerts, services, layout]);
   const queueRef = useRef(queue);
   queueRef.current = queue;
+  const servicesRef = useRef(services);
+  servicesRef.current = services;
+  const [checking, setChecking] = useState<string | null>(null);
 
   const [mode, setMode] = useState<TechPhase>('idle');
   const sim = useRef({
@@ -247,6 +263,9 @@ function Technician({ layout }: { layout: Layout }) {
     target: null as string | null,
     at: null as string | null,
     t: 0,
+    restUntil: 3,
+    inspectUntil: 0,
+    rounds: 0,
   });
 
   const root = useRef<THREE.Group>(null);
@@ -278,11 +297,26 @@ function Technician({ layout }: { layout: Layout }) {
         go('home', routeHome(layout, from, TECH_DX), null);
       }
     };
+    // Incidents first; otherwise carry on with the round or head home for a break.
+    const afterCheck = () => {
+      setChecking(null);
+      const from = st.at!;
+      if (queueRef.current.length || still) return next();
+      const target = st.rounds < PATROL_ROUNDS ? pickPatrol(servicesRef.current, layout.slots, from) : null;
+      if (!(target && go('patrol', routeBetween(layout, from, target, TECH_DX), target))) {
+        go('home', routeHome(layout, from, TECH_DX), null);
+      }
+    };
 
     switch (st.phase) {
       case 'idle': {
         const job = queueRef.current[0];
         if (job) go('walk', routeFromHome(layout, job, TECH_DX), job);
+        else if (!still && st.t >= st.restUntil) {
+          const target = pickPatrol(servicesRef.current, layout.slots, null);
+          st.rounds = 0;
+          if (target) go('patrol', routeFromHome(layout, target, TECH_DX), target);
+        }
         break;
       }
       case 'walk':
@@ -294,6 +328,22 @@ function Technician({ layout }: { layout: Layout }) {
           } else next();
         }
         break;
+      case 'patrol':
+        if (st.walker!.step(TECH_SPEED * dt)) {
+          st.at = st.target;
+          if (queueRef.current.length) next();
+          else {
+            st.phase = 'inspect';
+            st.inspectUntil = st.t + 3 + Math.random() * 3;
+            st.rounds++;
+            setMode('inspect');
+            setChecking(st.at);
+          }
+        }
+        break;
+      case 'inspect':
+        if (queueRef.current.length || st.t >= st.inspectUntil) afterCheck();
+        break;
       case 'work':
         if (!queueRef.current.includes(st.at!)) next(); // Dokploy says it's healthy again
         break;
@@ -302,16 +352,18 @@ function Technician({ layout }: { layout: Layout }) {
           st.phase = 'idle';
           st.at = null;
           st.walker = null;
+          st.restUntil = st.t + REST_S;
           setMode('idle');
         }
         break;
     }
 
     // pose
-    const walking = st.phase === 'walk' || st.phase === 'home';
+    const walking = st.phase === 'walk' || st.phase === 'home' || st.phase === 'patrol';
+    const busy = st.phase === 'work' || st.phase === 'inspect';
     if (st.walker) g.position.copy(st.walker.pos);
     else g.position.set(...layout.home);
-    const heading = st.phase === 'work' ? FACE_RACK : st.walker ? st.walker.heading : 0;
+    const heading = busy ? FACE_RACK : st.walker ? st.walker.heading : 0;
     g.rotation.y = dampAngle(g.rotation.y, heading, 10, dt);
 
     const swing = walking && !still ? Math.sin(st.t * 10) * 0.55 : 0;
@@ -320,7 +372,13 @@ function Technician({ layout }: { layout: Layout }) {
     if (armL.current) armL.current.rotation.x = -swing * 0.8;
     if (armR.current) {
       armR.current.rotation.x =
-        st.phase === 'work' ? (still ? -1.9 : -1.6 - Math.abs(Math.sin(st.t * 7)) * 0.7) : swing * 0.8;
+        st.phase === 'work'
+          ? still
+            ? -1.9
+            : -1.6 - Math.abs(Math.sin(st.t * 7)) * 0.7
+          : st.phase === 'inspect'
+            ? -1.2 - Math.sin(st.t * 3) * 0.25 // holding up the tablet
+            : swing * 0.8;
     }
     if (body.current) {
       body.current.position.y = walking && !still ? Math.abs(Math.sin(st.t * 10)) * 0.035 : still ? 0 : Math.sin(st.t * 2) * 0.006;
@@ -338,6 +396,11 @@ function Technician({ layout }: { layout: Layout }) {
             <span className="bubble-spinner" />
             Investigating…
           </div>
+        </Label>
+      )}
+      {mode === 'inspect' && checking && (
+        <Label position={[0, 1.6, 0]} zIndex={8}>
+          <div className="bubble">Routine check · {services[checking]?.name ?? 'rack'}</div>
         </Label>
       )}
     </group>

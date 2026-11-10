@@ -55,6 +55,10 @@ export interface Service {
   net?: { rxBps: number; txBps: number };
   /** Running containers right now (from container stats). */
   containers?: number;
+  /** For a helper container (db, cache, broker…): the node of the app it mostly talks to. */
+  peerId?: string;
+  /** Why the node is in error, when it is more specific than Dokploy's status (e.g. a Kuma monitor). */
+  incident?: string;
 }
 
 export const STAGES = ['Clone', 'Build', 'Push', 'Start', 'Health'] as const;
