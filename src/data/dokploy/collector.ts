@@ -12,6 +12,7 @@
  * Every refresh ends in `commit()`, which diffs the new World against the last one and
  * publishes only what changed.
  */
+import { Backoff } from '../backoff';
 import { diffWorld } from '../diff';
 import type { Alert, Deployment, Server, Service, ServiceKind, ServiceStatus, SourceStatus, World } from '../types';
 import {
@@ -158,6 +159,8 @@ export class Collector {
   /** Container keys per service id (main container first, then by name, so node order is stable). */
   private containerKeys = new Map<string, string[]>();
   private kuma: KumaState | null = null;
+  /** One probe before each round; see Backoff. */
+  private gate = new Backoff();
   private extras: Extras = {};
   /** TLS days left per domain host (null: no certificate / unreachable). */
   private certs = new Map<string, number | null>();
@@ -193,6 +196,15 @@ export class Collector {
 
   tick() {
     return this.once('tick', async () => {
+      if (!this.gate.allowed(Date.now())) return;
+      try {
+        await this.t('/healthz', 4_000);
+        this.gate.ok();
+      } catch {
+        this.gate.fail(Date.now());
+        this.setStatus({ state: 'error', message: '3Dokploy is restarting…', syncedAt: this.status.syncedAt });
+        return;
+      }
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
       if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras());
