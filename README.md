@@ -65,6 +65,7 @@ build type and port **3000**, set the variables below, then add a domain.
 | `UMAMI_URL` / `UMAMI_API_KEY` | – | Umami: active visitors walk in through the gate to their site's rack. |
 | `CROWDSEC_URL` / `CROWDSEC_BOUNCER_KEY` | – | CrowdSec LAPI: blocked attackers bounce off the gate, with a counter. |
 | `DOCKER_PROXY_URL` | – | A [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) with `CONTAINERS=1` only: container log lines in the inspector (secrets masked). |
+| `FLOW_STATUS_FILE` | – | JSON from a conntrack sidecar (`[{s, d, p, n}]`: source IP, target IP, port, open connections; needs `DOCKER_PROXY_URL` to map IPs to containers): arcs between racks that talk to each other, and "Talks to" in the inspector. |
 | `BACKUP_STATUS_FILE` | – | JSON from a sidecar (name, newest file time, size per backup folder): the backup vault and its trucks. The dumps themselves never reach 3Dokploy. |
 | `PREFS_FILE` | `/data/prefs.json` | Building order, complexes and colour presets, shared by all viewers. Mount a volume on `/data`. |
 
