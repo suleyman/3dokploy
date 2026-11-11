@@ -29,6 +29,17 @@ export interface Server {
   bansToday?: number;
   banAt?: number;
   backups?: Backup[];
+  /** Live connections between nodes (optional /api/flows): client → server, ports, open connections. */
+  links?: Link[];
+  /** Open connections per node to outside the docker networks. */
+  egress?: Record<string, number>;
+}
+
+export interface Link {
+  from: string;
+  to: string;
+  ports: number[];
+  conns: number;
 }
 
 export interface Project {

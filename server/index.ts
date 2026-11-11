@@ -16,7 +16,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
 import { forward, loadTarget } from './dokploy.ts';
-import { backups, certs, crowdsec, glitchtip, host, logs, umami } from './extras.ts';
+import { backups, certs, crowdsec, flows, glitchtip, host, logs, umami } from './extras.ts';
 import { kuma } from './kuma.ts';
 import { prefs } from './prefs.ts';
 
@@ -80,6 +80,7 @@ app.get('/api/umami', umami());
 app.get('/api/crowdsec', crowdsec());
 app.get('/api/logs', logs());
 app.get('/api/backups', backups());
+app.get('/api/flows', flows());
 app.get('/api/certs', certs());
 app.get('/api/host', host());
 app.get('/api/:procedure', forward(target));

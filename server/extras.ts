@@ -8,6 +8,7 @@
  *   /api/crowdsec   CROWDSEC_URL + CROWDSEC_BOUNCER_KEY      active bans, bans seen today
  *   /api/logs       DOCKER_PROXY_URL (docker-socket-proxy)  last lines of one container
  *   /api/backups    BACKUP_STATUS_FILE                      newest dump per backup folder
+ *   /api/flows      FLOW_STATUS_FILE + DOCKER_PROXY_URL     connections between containers
  *   /api/certs      (always)                                TLS days left per host
  *   /api/host       (always)                                disk + memory of the host
  */
@@ -248,6 +249,59 @@ export function logs() {
       return json(c, { enabled: true, lines: demuxLogs(new Uint8Array(await res.arrayBuffer())) });
     } catch (e) {
       return json(c, { enabled: true, lines: [], error: `Docker proxy: ${errorOf(e)}` });
+    }
+  };
+}
+
+// ---- container-to-container connections ---------------------------------------------------------
+
+export interface Flow {
+  from: string;
+  /** container name, or "internet" for connections leaving the docker networks */
+  to: string;
+  port: number;
+  conns: number;
+}
+
+/**
+ * Connection counts by IP (from a conntrack sidecar) → by container name, using the IPs Docker
+ * reports per container. Connections whose ends aren't containers are dropped, except the
+ * outgoing ones, which are summed up as "internet".
+ */
+export function mapFlows(rows: { s: string; d: string; p: number; n: number }[], containers: { Names?: string[]; NetworkSettings?: { Networks?: Record<string, { IPAddress?: string }> } }[]): Flow[] {
+  const byIp = new Map<string, string>();
+  for (const c of containers) {
+    const name = c.Names?.[0]?.replace(/^\//, '');
+    if (!name) continue;
+    for (const net of Object.values(c.NetworkSettings?.Networks ?? {})) if (net.IPAddress) byIp.set(net.IPAddress, name);
+  }
+  const out = new Map<string, Flow>();
+  for (const r of rows) {
+    const from = byIp.get(r.s);
+    const to = r.d === 'internet' ? 'internet' : byIp.get(r.d);
+    if (!from || !to || from === to) continue;
+    const key = `${from}>${to}:${r.p}`;
+    const f = out.get(key) ?? { from, to, port: r.p, conns: 0 };
+    f.conns += r.n;
+    out.set(key, f);
+  }
+  return [...out.values()];
+}
+
+export function flows() {
+  const file = env('FLOW_STATUS_FILE');
+  const proxy = base('DOCKER_PROXY_URL');
+  const load = cached(10_000, async () => {
+    const rows = JSON.parse(await readFile(file!, 'utf8')) as { s: string; d: string; p: number; n: number }[];
+    const containers = (await getJson(`${proxy}/containers/json`, {})) as Parameters<typeof mapFlows>[1];
+    return mapFlows(rows, containers);
+  });
+  return async (c: Context) => {
+    if (!file || !proxy) return json(c, { enabled: false, flows: [] });
+    try {
+      return json(c, { enabled: true, flows: await load() });
+    } catch (e) {
+      return json(c, { enabled: true, flows: [], error: `Flows: ${errorOf(e)}` });
     }
   };
 }

@@ -12,6 +12,7 @@ import { DataFlow } from './DataFlow';
 import { DeployBeams, Pulses } from './Effects';
 import { InfiniteGrid } from './InfiniteGrid';
 import { Complexes, Movers, Sky, Tour, Vault, Visitors } from './Life';
+import { Links } from './Links';
 import { Building } from './Building';
 import { animateLeds } from './materials';
 import { Markers, ServiceUnit } from './Rack';
@@ -72,6 +73,7 @@ export function Scene() {
           <Pulses layout={layout} />
           <DataFlow layout={layout} />
           <Visitors layout={layout} />
+          <Links layout={layout} />
           <Vault layout={layout} />
           <Movers layout={layout} />
           <CameraRig layout={layout} />

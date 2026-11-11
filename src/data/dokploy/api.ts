@@ -334,6 +334,7 @@ export interface Extras {
   crowdsec?: { enabled: boolean; active?: number; today?: number; lastAt?: number; error?: string };
   host?: { enabled: boolean; diskUsed: number | null; memUsed: number | null };
   backups?: { enabled: boolean; backups: { name: string; newest: number; sizeMb: number; files: number }[]; error?: string };
+  flows?: { enabled: boolean; flows: { from: string; to: string; port: number; conns: number }[]; error?: string };
 }
 
 /** One optional integration of the 3Dokploy server (see server/extras.ts). */

@@ -6,6 +6,7 @@ import { latestDeploys, useStore } from '../store';
 import { TRIGGER_LABEL } from '../theme';
 import { DeployPill, KindBadge, Sparkline, StatusPill } from './bits';
 import { CloseIcon, ExternalIcon } from './icons';
+import { linkLabel } from '../scene/Links';
 
 export function Inspector() {
   const id = useStore((s) => s.selectedId);
@@ -181,6 +182,8 @@ export function Inspector() {
         </section>
       )}
 
+      <TalksTo id={svc.id} />
+
       {svc.container && <ContainerLogs container={svc.container} />}
 
       <p className="insp-foot muted small">Read-only · live from Dokploy</p>
@@ -215,6 +218,47 @@ function ContainerLogs({ container }: { container: string }) {
     <section>
       <h3 className="section-title">Logs · {container}</h3>
       {state.error ? <p className="muted small">{state.error}</p> : <pre ref={box} className="log-lines">{state.lines.join('\n') || 'No output yet.'}</pre>}
+    </section>
+  );
+}
+
+/** Live connections of this node (optional /api/flows): whom it calls, who calls it, and the internet. */
+function TalksTo({ id }: { id: string }) {
+  const links = useStore((s) => s.servers.local?.links);
+  const egress = useStore((s) => s.servers.local?.egress?.[id]);
+  const services = useStore((s) => s.services);
+  const projects = useStore((s) => s.projects);
+  const mine = (links ?? []).filter((l) => l.from === id || l.to === id);
+  if (!links || (!mine.length && !egress)) return null;
+  return (
+    <section>
+      <h3 className="section-title">Talks to</h3>
+      <ul className="talk-list">
+        {mine.map((l) => {
+          const out = l.from === id;
+          const peer = services[out ? l.to : l.from];
+          return (
+            <li key={`${l.from}>${l.to}`}>
+              <button type="button" onClick={() => peer && useStore.getState().select(peer.id)} title={out ? 'This node opens these connections' : 'These connections come in'}>
+                <span className="mono">{out ? '→' : '←'}</span>
+                <span className="truncate">
+                  {peer?.name ?? 'node'} <span className="muted small">{projects[peer?.projectId ?? '']?.name}</span>
+                </span>
+                <span className="muted small mono">{linkLabel(l)}</span>
+              </button>
+            </li>
+          );
+        })}
+        {!!egress && (
+          <li>
+            <button type="button" disabled>
+              <span className="mono">→</span>
+              <span>Internet</span>
+              <span className="muted small mono">{egress} open</span>
+            </button>
+          </li>
+        )}
+      </ul>
     </section>
   );
 }

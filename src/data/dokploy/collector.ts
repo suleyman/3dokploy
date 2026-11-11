@@ -14,7 +14,7 @@
  */
 import { Backoff } from '../backoff';
 import { diffWorld } from '../diff';
-import type { Alert, Deployment, Server, Service, ServiceKind, ServiceStatus, SourceStatus, World } from '../types';
+import type { Alert, Deployment, Link, Server, Service, ServiceKind, ServiceStatus, SourceStatus, World } from '../types';
 import {
   UpstreamError,
   belongsTo,
@@ -328,6 +328,31 @@ export class Collector {
     return down;
   }
 
+  /** Container flows → links between nodes (one per pair, ports merged) and outgoing counts per node. */
+  private links(byContainer: Map<string, string>): { links?: Link[]; egress?: Record<string, number> } {
+    const flows = this.extras.flows;
+    if (!flows?.enabled || flows.error) return {};
+    const pairs = new Map<string, Link>();
+    const egress: Record<string, number> = {};
+    for (const f of flows.flows) {
+      const from = byContainer.get(f.from);
+      if (!from) continue;
+      if (f.to === 'internet') {
+        egress[from] = (egress[from] ?? 0) + f.conns;
+        continue;
+      }
+      const to = byContainer.get(f.to);
+      if (!to || to === from) continue;
+      const key = `${from}>${to}`;
+      const l = pairs.get(key) ?? { from, to, ports: [], conns: 0 };
+      if (!l.ports.includes(f.port)) l.ports.push(f.port);
+      l.conns += f.conns;
+      pairs.set(key, l);
+    }
+    for (const l of pairs.values()) l.ports.sort((a, b) => a - b);
+    return { links: [...pairs.values()].sort((a, b) => b.conns - a.conns), egress };
+  }
+
   /** Slowest response time per URL host across Kuma monitors. */
   private kumaLatency() {
     const out = new Map<string, number>();
@@ -341,7 +366,7 @@ export class Collector {
 
   /** The optional integrations of the 3Dokploy server; one that answers "not configured" isn't asked again. */
   private async refreshExtras() {
-    const names = ['glitchtip', 'umami', 'crowdsec', 'host', 'backups'] as const;
+    const names = ['glitchtip', 'umami', 'crowdsec', 'host', 'backups', 'flows'] as const;
     await Promise.allSettled(
       names.map(async (name) => {
         if (this.extras[name]?.enabled === false) return;
@@ -580,6 +605,7 @@ export class Collector {
             memUsed: host?.memUsed ?? undefined,
             ...(crowdsec?.enabled && !crowdsec.error ? { bansActive: crowdsec.active, bansToday: crowdsec.today, banAt: crowdsec.lastAt || undefined } : {}),
             backups: backups?.enabled ? backups.backups.map((b) => ({ ...b, nodeId: byContainer.get(b.name) })) : undefined,
+            ...this.links(byContainer),
           }
         : sv,
     );
