@@ -4,6 +4,7 @@
  *
  *   every tick (5 s)   projects + statuses, logs of running deploys
  *   every 2nd tick     deployment feed, container stats (CPU / memory / network)
+ *   every 6th tick     compose stacks' container lists
  *   every 60th tick    domains + sources (per-service `.one` calls), host resources
  *
  * A service with several containers (a compose stack, or replicas) is split into one node per
@@ -122,7 +123,6 @@ export function dbKind(key: string): ServiceKind | undefined {
 
 /** A container's node status; a deploy in progress wins while the container itself is fine. */
 function containerStatus(c: ComposeContainer, service: ServiceStatus): ServiceStatus {
-  if (service === 'error') return 'error'; // e.g. a Kuma monitor is down although the container runs
   if (c.state === 'restarting' || c.state === 'dead' || /unhealthy/i.test(c.status)) return 'error';
   if (c.state !== 'running') return 'idle';
   return service === 'deploying' ? 'deploying' : 'running';
@@ -207,7 +207,10 @@ export class Collector {
       }
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
-      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras());
+      // The container list (`docker ps` on the Dokploy host, per stack and per open tab) only changes
+      // on deploys: refresh it every 30 s; the stats in between use the cached list.
+      if (n % 2 === 0)
+        jobs.push(this.refreshDeployments(), (n % 6 === 0 ? this.refreshContainers() : Promise.resolve()).then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras());
       if (n % 60 === 0) jobs.push(this.refreshDetails().then(() => this.refreshCerts()));
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
@@ -557,8 +560,12 @@ export class Collector {
       return keys.map((key, i) => {
         const cm = this.metrics.get(containerNodeId(svc.id, key));
         const c = listed.get(key);
+        // A failed deploy (or a Kuma monitor that is down) leaves the containers running: the first
+        // node, which keeps the service id and carries deploys and alerts, keeps the error.
         const status = c
-          ? containerStatus(c, i === 0 ? node.status : svc.status)
+          ? i === 0 && node.status === 'error'
+            ? 'error'
+            : containerStatus(c, node.status)
           : listed.size
             ? i === 0 && node.status === 'error'
               ? 'error'
