@@ -4,6 +4,7 @@
  *
  *   every tick (5 s)   projects + statuses, logs of running deploys
  *   every 2nd tick     deployment feed, container stats (CPU / memory / network)
+ *   every 6th tick     compose stacks' container lists
  *   every 60th tick    domains + sources (per-service `.one` calls), host resources
  *
  * A service with several containers (a compose stack, or replicas) is split into one node per
@@ -142,7 +143,9 @@ export class Collector {
     return this.once('tick', async () => {
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
-      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshContainers().then(() => this.refreshStats()));
+      // The container list (`docker ps` on the Dokploy host, per stack and per open tab) only changes
+      // on deploys: refresh it every 30 s; the stats in between use the cached list.
+      if (n % 2 === 0) jobs.push(this.refreshDeployments(), (n % 6 === 0 ? this.refreshContainers() : Promise.resolve()).then(() => this.refreshStats()));
       if (n % 60 === 0) jobs.push(this.refreshDetails());
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
@@ -356,7 +359,9 @@ export class Collector {
         const c = listed.get(key);
         return {
           ...node,
-          status: c ? containerStatus(c, node.status) : node.status,
+          // A failed deploy leaves the old containers running: the first node (it keeps the service id,
+          // deploys and alerts hang off it) keeps Dokploy's error.
+          status: c ? (i === 0 && node.status === 'error' ? 'error' : containerStatus(c, node.status)) : node.status,
           id: i === 0 ? svc.id : containerNodeId(svc.id, key),
           name: containerLabel(key, svc.appName ?? ''),
           description: `${svc.name} · container ${key}`,

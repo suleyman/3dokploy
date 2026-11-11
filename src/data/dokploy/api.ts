@@ -300,7 +300,7 @@ export async function fetchContainerStats(t: Transport): Promise<ContainerStat[]
   });
 }
 
-/** Containers that belong to a Dokploy service: swarm tasks (`app.1.xyz`), compose (`app-web-1`) or stacks (`app_web.1`). */
+/** One container of a compose stack, as Dokploy lists it. */
 export interface ComposeContainer {
   name: string;
   /** docker state: running, exited, restarting, paused, created, dead */
@@ -309,12 +309,21 @@ export interface ComposeContainer {
   status: string;
 }
 
-/** Containers of one compose stack, matched by label, so fixed `container_name`s are found too. */
+/** A one-shot container that finished cleanly (migration, init job): not a rack. */
+export const finishedOneShot = (c: ComposeContainer) => c.state === 'exited' && /^Exited \(0\)/.test(c.status);
+
+/**
+ * Containers of one compose stack, matched by label, so fixed `container_name`s are found too.
+ * Dokploy lists them with `docker ps -a`; containers that exited cleanly are left out.
+ */
 export async function fetchComposeContainers(t: Transport, appName: string): Promise<ComposeContainer[]> {
   const raw = await get<Raw[]>(t, `/api/docker.getContainersByAppNameMatch?appName=${q(appName)}&appType=docker-compose`);
-  return raw.map((c) => ({ name: String(c.name ?? ''), state: String(c.state ?? ''), status: String(c.status ?? '') })).filter((c) => c.name);
+  return raw
+    .map((c) => ({ name: String(c.name ?? ''), state: String(c.state ?? ''), status: String(c.status ?? '') }))
+    .filter((c) => c.name && !finishedOneShot(c));
 }
 
+/** Containers that belong to a Dokploy service: swarm tasks (`app.1.xyz`), compose (`app-web-1`) or stacks (`app_web.1`). */
 export const belongsTo = (container: string, appName: string) =>
   container === appName || container.startsWith(`${appName}.`) || container.startsWith(`${appName}-`) || container.startsWith(`${appName}_`);
 
