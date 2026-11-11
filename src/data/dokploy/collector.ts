@@ -4,7 +4,11 @@
  *
  *   every tick (5 s)   projects + statuses, logs of running deploys
  *   every 2nd tick     deployment feed, container stats (CPU / memory / network)
+ *   every 6th tick     compose stacks' container lists
  *   every 60th tick    domains + sources (per-service `.one` calls), host resources
+ *
+ * A service with several containers (a compose stack, or replicas) is split into one node per
+ * container. The first keeps the service id, so deploys and alerts stay attached to it.
  *
  * Every refresh ends in `commit()`, which diffs the new World against the last one and
  * publishes only what changed.
@@ -14,6 +18,7 @@ import type { Alert, Deployment, Server, Service, ServiceStatus, SourceStatus, W
 import {
   UpstreamError,
   belongsTo,
+  fetchComposeContainers,
   fetchContainerStats,
   fetchDeployments,
   fetchDetails,
@@ -24,6 +29,7 @@ import {
   inferStages,
   mapDeployment,
   mapLimit,
+  type ComposeContainer,
   type ContainerStat,
   type Details,
   type Structure,
@@ -56,6 +62,31 @@ const NET_WINDOW_MS = 5 * 60_000;
 
 type NetSample = { at: number; rx: number; tx: number };
 
+/** Id of the node for one container of a service; see `compose()`. */
+export const containerNodeId = (serviceId: string, key: string) => `${serviceId}::${key}`;
+
+/** Swarm tasks are named `app.1.<task id>`; drop the task id so the node survives redeploys. */
+const containerKey = (name: string) => name.replace(/^(.+\.\d+)\.[a-z0-9]{10,}$/, '$1');
+
+/** Main containers first (they take the service id, so deploy carts go there), helpers last. */
+const MAIN = /(^|[-_.])(web|app|api|server|frontend)([-_.]|$)/i;
+const HELPER = /(^|[-_.])(db|postgres|mysql|mariadb|mongo|redis|valkey|broker|backup|cron|worker|vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
+const rank = (key: string) => (MAIN.test(key) ? 0 : HELPER.test(key) ? 2 : 1);
+const byRole = (a: string, b: string) => rank(a) - rank(b) || a.localeCompare(b);
+
+/** A container's node status; a deploy in progress wins while the container itself is fine. */
+function containerStatus(c: ComposeContainer, service: ServiceStatus): ServiceStatus {
+  if (c.state === 'restarting' || c.state === 'dead' || /unhealthy/i.test(c.status)) return 'error';
+  if (c.state !== 'running') return 'idle';
+  return service === 'deploying' ? 'deploying' : 'running';
+}
+
+/** "apps-paperlessngx-rpsc0w-paperless-ngx-db-1" → "paperless-ngx-db"; fixed names stay as they are. */
+function containerLabel(key: string, appName: string) {
+  const short = key.startsWith(appName) ? key.slice(appName.length).replace(/^[-_.]/, '') : key;
+  return short.replace(/[-_]1$/, '') || key;
+}
+
 /**
  * docker stats prints NetIO with three significant digits ("12.1MB"), so a 10 s delta is
  * usually zero. Measure against the newest older sample whose counter actually differs: the
@@ -78,6 +109,10 @@ export class Collector {
   private deploys: MappedDeploy[] = [];
   private details = new Map<string, Details>();
   private metrics = new Map<string, Metric>();
+  /** Container keys per service id (main container first, then by name, so node order is stable). */
+  private containerKeys = new Map<string, string[]>();
+  /** Compose stacks' containers by service id, from Dokploy's label match. */
+  private composeContainers = new Map<string, ComposeContainer[]>();
   private netHistory = new Map<string, NetSample[]>();
   private logs = new Map<string, { lines: string[]; final: boolean }>();
   private host: Partial<Server> & { hostname?: string } = {};
@@ -98,7 +133,7 @@ export class Collector {
     return this.once('bootstrap', async () => {
       await Promise.allSettled([this.refreshStructure(), this.refreshDeployments()]);
       this.commit();
-      void Promise.allSettled([this.refreshStats(), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
+      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
         this.commit(),
       );
     });
@@ -108,7 +143,9 @@ export class Collector {
     return this.once('tick', async () => {
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
-      if (n % 2 === 0) jobs.push(this.refreshDeployments(), this.refreshStats());
+      // The container list (`docker ps` on the Dokploy host, per stack and per open tab) only changes
+      // on deploys: refresh it every 30 s; the stats in between use the cached list.
+      if (n % 2 === 0) jobs.push(this.refreshDeployments(), (n % 6 === 0 ? this.refreshContainers() : Promise.resolve()).then(() => this.refreshStats()));
       if (n % 60 === 0) jobs.push(this.refreshDetails());
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
@@ -193,6 +230,22 @@ export class Collector {
     }
   }
 
+  private async refreshContainers() {
+    const stacks = (this.structure?.services ?? []).filter((s) => s.kind === 'compose' && s.appName);
+    // One call per stack: stop at the first failure (e.g. a proxy answering 404 while 3Dokploy
+    // itself redeploys), so a burst of errors can't get the viewer banned by fail2ban/CrowdSec.
+    let failed = false;
+    await mapLimit(stacks, 2, async (svc) => {
+      if (failed) return;
+      try {
+        this.composeContainers.set(svc.id, await fetchComposeContainers(this.t, svc.appName!));
+      } catch (e) {
+        failed = true;
+        this.warn('containers', e);
+      }
+    });
+  }
+
   private async refreshStats() {
     if (!this.structure) return;
     let stats: ContainerStat[];
@@ -204,22 +257,32 @@ export class Collector {
     const now = Date.now();
     for (const svc of this.structure.services) {
       if (!svc.appName) continue;
-      const own = stats.filter((c) => belongsTo(c.name, svc.appName!));
-      const prev = this.metrics.get(svc.id);
-      const sample: NetSample = { at: now, rx: own.reduce((a, c) => a + c.rx, 0), tx: own.reduce((a, c) => a + c.tx, 0) };
-      const history = (this.netHistory.get(svc.id) ?? []).filter((x) => now - x.at <= NET_WINDOW_MS);
-      const cpu = milli(own.reduce((a, c) => a + c.cpu, 0));
-      this.metrics.set(svc.id, {
-        cpu,
-        memMb: Math.round(own.reduce((a, c) => a + c.memMb, 0)),
-        memLimitMb: Math.round(Math.max(0, ...own.map((c) => c.memLimitMb))) || prev?.memLimitMb || 0,
-        rxBps: Math.round(netRate(history, sample, 'rx')),
-        txBps: Math.round(netRate(history, sample, 'tx')),
-        containers: own.length,
-        hist: [...(prev?.hist ?? []).slice(-(HIST - 1)), cpu],
-      });
-      this.netHistory.set(svc.id, [...history, sample]);
+      const listed = this.composeContainers.get(svc.id);
+      const names = new Set(listed?.map((c) => c.name));
+      const own = stats.filter((c) => names.has(c.name) || belongsTo(c.name, svc.appName!));
+      this.measure(svc.id, own, now);
+      const keys = (listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))]).sort(byRole);
+      this.containerKeys.set(svc.id, keys);
+      for (const key of keys) this.measure(containerNodeId(svc.id, key), own.filter((c) => containerKey(c.name) === key), now);
     }
+  }
+
+  /** Updates the metric (and network history) kept under `id` from a set of containers. */
+  private measure(id: string, own: ContainerStat[], now: number) {
+    const prev = this.metrics.get(id);
+    const sample: NetSample = { at: now, rx: own.reduce((a, c) => a + c.rx, 0), tx: own.reduce((a, c) => a + c.tx, 0) };
+    const history = (this.netHistory.get(id) ?? []).filter((x) => now - x.at <= NET_WINDOW_MS);
+    const cpu = milli(own.reduce((a, c) => a + c.cpu, 0));
+    this.metrics.set(id, {
+      cpu,
+      memMb: Math.round(own.reduce((a, c) => a + c.memMb, 0)),
+      memLimitMb: Math.round(Math.max(0, ...own.map((c) => c.memLimitMb))) || prev?.memLimitMb || 0,
+      rxBps: Math.round(netRate(history, sample, 'rx')),
+      txBps: Math.round(netRate(history, sample, 'tx')),
+      containers: own.length,
+      hist: [...(prev?.hist ?? []).slice(-(HIST - 1)), cpu],
+    });
+    this.netHistory.set(id, [...history, sample]);
   }
 
   private async refreshDetails(only?: Service[]) {
@@ -272,10 +335,10 @@ export class Collector {
       if (d.status === 'success' && at > (lastDeploy.get(d.serviceId) ?? 0)) lastDeploy.set(d.serviceId, at);
     }
 
-    const services: Service[] = s.services.map((svc) => {
+    const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
-      return {
+      const node: Service = {
         ...svc,
         domain: det?.domain,
         source: det?.source,
@@ -288,6 +351,30 @@ export class Collector {
         containers: m?.containers,
         lastDeploy: lastDeploy.get(svc.id) ?? null,
       };
+      const keys = this.containerKeys.get(svc.id) ?? [];
+      if (keys.length < 2) return [node];
+      const listed = new Map(this.composeContainers.get(svc.id)?.map((c) => [c.name, c]));
+      return keys.map((key, i) => {
+        const cm = this.metrics.get(containerNodeId(svc.id, key));
+        const c = listed.get(key);
+        return {
+          ...node,
+          // A failed deploy leaves the old containers running: the first node (it keeps the service id,
+          // deploys and alerts hang off it) keeps Dokploy's error.
+          status: c ? (i === 0 && node.status === 'error' ? 'error' : containerStatus(c, node.status)) : node.status,
+          id: i === 0 ? svc.id : containerNodeId(svc.id, key),
+          name: containerLabel(key, svc.appName ?? ''),
+          description: `${svc.name} · container ${key}`,
+          domain: i === 0 ? node.domain : undefined,
+          replicas: 1,
+          memLimitMb: cm?.memLimitMb || node.memLimitMb,
+          cpu: cm?.cpu ?? 0,
+          memMb: cm?.memMb ?? 0,
+          cpuHist: cm?.hist ?? [],
+          net: cm ? { rxBps: cm.rxBps, txBps: cm.txBps } : undefined,
+          containers: cm?.containers,
+        };
+      });
     });
 
     const servers = s.servers.map((sv) =>

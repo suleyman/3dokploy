@@ -51,6 +51,7 @@ const READ_ONLY = new Set([
   'deployment.allByCompose',
   'deployment.readLogs',
   'swarm.getContainerStats',
+  'docker.getContainersByAppNameMatch',
   'swarm.getNodes',
   'swarm.getNodeInfo',
   'application.one',
