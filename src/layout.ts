@@ -111,8 +111,30 @@ export function structureKey({ projects, environments, services }: Structure, pr
     services.map((s) => `${s.id}@${s.environmentId}:${isDb(s.kind) ? 'd' : 'a'}`).join(','),
     prefs.order.join(','),
     prefs.groups.map((g) => `${g.id}=${g.name}:${g.projects.join('+')}`).join(','),
+    [...sleepingProjects(services)].sort().join(','),
   ].join('|');
 }
+
+/** Containers that may keep running while their app sleeps (a backup job needs its database). */
+const SUPPORT = /(^|[-_.])(db|postgres|mysql|mariadb|mongo|redis|valkey|backup|cron)([-_.\d]|$)/i;
+
+/**
+ * Projects asleep (Sablier): at least one node sleeps and every node still awake is a database or
+ * another support container. Their buildings move to the "Sleeping" complex while they sleep.
+ */
+export function sleepingProjects(services: Service[]) {
+  const awake = new Set<string>();
+  const asleep = new Set<string>();
+  for (const s of services) {
+    if (s.sleeping) asleep.add(s.projectId);
+    else if (!isDb(s.kind) && !SUPPORT.test(s.container ?? s.name)) awake.add(s.projectId);
+  }
+  return new Set([...asleep].filter((p) => !awake.has(p)));
+}
+
+export const SLEEPING_COMPLEX = '__sleeping';
+/** Gap between the avenue and the Sleeping complex on its left. */
+const SLEEP_GAP = 3;
 
 /**
  * Buildings in display order, in segments: each complex (members by the saved order), then the
@@ -147,8 +169,11 @@ export function computeLayout({ projects, environments, services }: Structure, p
   // Apps and compose stacks first, databases at the end of the row.
   for (const list of byEnv.values()) list.sort((a, b) => Number(isDb(a.kind)) - Number(isDb(b.kind)));
 
-  const segments = orderBuildings(projects, prefs);
-  const ordered = segments.flatMap((s) => s.projects);
+  // Sleeping projects leave the grid (and their complex) and sit left of the avenue while asleep.
+  const asleep = sleepingProjects(services);
+  const segments = orderBuildings(projects.filter((p) => !asleep.has(p.id)), prefs);
+  const sleepers = projects.filter((p) => asleep.has(p.id)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const ordered = [...segments.flatMap((s) => s.projects), ...sleepers];
 
   // 1. Size every building from its environments (each wraps into rows of MAX_PER_ROW).
   const drafts = ordered.map((project) => {
@@ -166,7 +191,8 @@ export function computeLayout({ projects, environments, services }: Structure, p
 
   // 2. Grid: columns share a width, rows share a depth and a front line. A complex starts on a
   //    fresh grid row and the rest of its last row stays empty, so its buildings stay together.
-  const cols = Math.max(1, Math.ceil(Math.sqrt(drafts.length)));
+  const sleepDrafts = drafts.slice(drafts.length - sleepers.length);
+  const cols = Math.max(1, Math.ceil(Math.sqrt(drafts.length - sleepers.length)));
   const cells: (typeof drafts[number] | null)[] = [];
   let next = 0;
   const groupOf = new Map<string, string>();
@@ -180,8 +206,17 @@ export function computeLayout({ projects, environments, services }: Structure, p
   }
   const placed = cells.map((d, i) => ({ d, i })).filter((c): c is { d: typeof drafts[number]; i: number } => !!c.d);
   const gridRows = Math.max(1, Math.ceil(cells.length / cols));
+  // Sleeping complex: on the grid rows' front lines (so doors open onto the streets), from the
+  // second-to-last row upward (the vault sits on the last), as many columns as it needs.
+  const skip = gridRows > 1 ? 1 : 0;
+  const sleepRows = Math.max(1, gridRows - skip);
+  const sleepCols = Math.max(1, Math.ceil(sleepDrafts.length / sleepRows));
+  const sleepCell = (k: number) => ({ row: gridRows - 1 - skip - Math.floor(k / sleepCols), col: k % sleepCols });
+  const sleepW = Math.max(0, ...sleepDrafts.map((d) => d.w));
   const colW = Array.from({ length: cols }, (_, c) => Math.max(0, ...placed.filter((p) => p.i % cols === c).map((p) => p.d.w)));
-  const rowD = Array.from({ length: gridRows }, (_, r) => Math.max(0, ...placed.filter((p) => Math.floor(p.i / cols) === r).map((p) => p.d.d)));
+  const rowD = Array.from({ length: gridRows }, (_, r) =>
+    Math.max(0, ...placed.filter((p) => Math.floor(p.i / cols) === r).map((p) => p.d.d), ...sleepDrafts.filter((_, k) => sleepCell(k).row === r).map((d) => d.d)),
+  );
   const colX: number[] = [];
   colW.reduce((x, w, c) => ((colX[c] = x), x + w + COL_GAP), 0);
   const front: number[] = [];
@@ -195,9 +230,8 @@ export function computeLayout({ projects, environments, services }: Structure, p
   const buildings: BuildingLayout[] = [];
   const slots: Record<string, Slot> = {};
 
-  placed.forEach(({ d: b, i }) => {
-    const gridRow = Math.floor(i / cols);
-    const bx = ox + colX[i % cols];
+  const avenueX = ox - AVENUE;
+  const place = (b: (typeof drafts)[number], gridRow: number, bx: number) => {
     const bz = oz + front[gridRow] - b.d;
     let row = 0;
     const aisles: number[] = [];
@@ -243,14 +277,34 @@ export function computeLayout({ projects, environments, services }: Structure, p
       spine: { x: bx + b.spineX, z0: (aisles[0] ?? bz + b.d / 2) - AISLE / 2, z1: bz + b.d - WALL.t, w: SPINE_W },
       zones,
     });
+  };
+  placed.forEach(({ d: b, i }) => place(b, Math.floor(i / cols), ox + colX[i % cols]));
+  // right-to-left from the avenue, so the first sleeper sits closest to the city
+  sleepDrafts.forEach((b, k) => {
+    const { row, col } = sleepCell(k);
+    place(b, row, avenueX - SLEEP_GAP - (col + 1) * sleepW - col * COL_GAP);
   });
 
   const streets = front.map((z) => oz + z + STREET);
-  const avenueX = ox - AVENUE;
   const home: V3 = [avenueX + 1.2, 0, streets[gridRows - 1] + 0.9];
   const gate: V3 = [avenueX, 0, streets[gridRows - 1] + 2.6];
   const vault: V3 = [avenueX - 8, 0, streets[gridRows - 1] - 0.9];
-  const bounds = { minX: avenueX - 1, maxX: ox + totalW, minZ: oz, maxZ: oz + totalD };
+  const sleepX0 = avenueX - SLEEP_GAP - sleepCols * sleepW - (sleepCols - 1) * COL_GAP;
+  const bounds = { minX: sleepers.length ? sleepX0 - 1 : avenueX - 1, maxX: ox + totalW, minZ: oz, maxZ: oz + totalD };
+
+  const asleepBuildings = buildings.filter((b) => asleep.has(b.projectId));
+  const sleeping: ComplexLayout[] = asleepBuildings.length
+    ? [
+        {
+          id: SLEEPING_COMPLEX,
+          name: 'Sleeping',
+          x0: Math.min(...asleepBuildings.map((b) => b.x)) - COMPLEX_PAD,
+          z0: Math.min(...asleepBuildings.map((b) => b.z)) - COMPLEX_PAD,
+          x1: Math.max(...asleepBuildings.map((b) => b.x + b.w)) + COMPLEX_PAD,
+          z1: Math.max(...asleepBuildings.map((b) => b.z + b.d)) + COMPLEX_PAD,
+        },
+      ]
+    : [];
 
   const complexes: ComplexLayout[] = segments
     .filter((s) => s.group)
@@ -264,7 +318,8 @@ export function computeLayout({ projects, environments, services }: Structure, p
         x1: Math.max(...bs.map((b) => b.x + b.w)) + COMPLEX_PAD,
         z1: Math.max(...bs.map((b) => b.z + b.d)) + COMPLEX_PAD,
       };
-    });
+    })
+    .concat(sleeping);
 
   return {
     buildings,
