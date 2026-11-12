@@ -13,16 +13,20 @@
  * Every refresh ends in `commit()`, which diffs the new World against the last one and
  * publishes only what changed.
  */
+import { Backoff } from '../backoff';
 import { diffWorld } from '../diff';
-import type { Alert, Deployment, Server, Service, ServiceStatus, SourceStatus, World } from '../types';
+import type { Alert, Deployment, Link, Server, Service, ServiceKind, ServiceStatus, SourceStatus, World } from '../types';
 import {
   UpstreamError,
   belongsTo,
+  fetchCerts,
   fetchComposeContainers,
   fetchContainerStats,
+  fetchExtra,
   fetchDeployments,
   fetchDetails,
   fetchHost,
+  fetchKuma,
   fetchLogLines,
   fetchServiceDeployments,
   fetchStructure,
@@ -32,6 +36,8 @@ import {
   type ComposeContainer,
   type ContainerStat,
   type Details,
+  type Extras,
+  type KumaState,
   type Structure,
   type Transport,
 } from './api';
@@ -59,8 +65,31 @@ export type Publish = (event: 'patch' | 'status', data: unknown) => void;
 const milli = (v: number) => Math.round(v * 1000) / 1000;
 /** How far back a network rate may look for a counter change (see netRate). */
 const NET_WINDOW_MS = 5 * 60_000;
+/** How long a container that disappeared keeps its node (shown idle). */
+const GRACE_MS = 60_000;
 
 type NetSample = { at: number; rx: number; tx: number };
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+};
+/** Hosts whose first label is the service's name, digits aside ("maklerfotos24.de" for "maklerfotos"). */
+export function guessDomains(service: string, hosts: string[]): string[] {
+  const name = service.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (name.length < 4) return [];
+  return hosts.filter((h) => {
+    const label = h.toLowerCase().replace(/^www\./, '').split('.')[0].replace(/[^a-z0-9]/g, '');
+    const bare = label.replace(/\d+$/, '');
+    return bare.length >= 4 && (label === name || bare === name || bare === name.replace(/\d+$/, ''));
+  });
+}
+
+/** "www.example.com" and "example.com" are the same site for visitor counts. */
+const bareHost = (h: string) => h.toLowerCase().replace(/^www\./, '');
 
 /** Id of the node for one container of a service; see `compose()`. */
 export const containerNodeId = (serviceId: string, key: string) => `${serviceId}::${key}`;
@@ -71,8 +100,26 @@ const containerKey = (name: string) => name.replace(/^(.+\.\d+)\.[a-z0-9]{10,}$/
 /** Main containers first (they take the service id, so deploy carts go there), helpers last. */
 const MAIN = /(^|[-_.])(web|app|api|server|frontend)([-_.]|$)/i;
 const HELPER = /(^|[-_.])(db|postgres|mysql|mariadb|mongo|redis|valkey|broker|backup|cron|worker|vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
+/** Helpers that talk to the internet, not to their app: their traffic still comes from the gate. */
+const INTERNET = /(^|[-_.])(vpn|gluetun|egress|edge|proxy)([-_.\d]|$)/i;
 const rank = (key: string) => (MAIN.test(key) ? 0 : HELPER.test(key) ? 2 : 1);
 const byRole = (a: string, b: string) => rank(a) - rank(b) || a.localeCompare(b);
+
+/**
+ * A database container inside a compose stack gets the database look, like a Dokploy database
+ * service. Docker only tells us the name here, so this goes by the usual names.
+ */
+export function dbKind(key: string): ServiceKind | undefined {
+  const k = key.toLowerCase();
+  const has = (word: string) => new RegExp(`(^|[-_.])${word}([-_.\\d]|$)`).test(k);
+  if (has('mongo') || has('mongodb')) return 'mongo';
+  if (has('mariadb')) return 'mariadb';
+  if (has('mysql')) return 'mysql';
+  if (has('redis') || has('valkey') || has('keydb') || has('broker')) return 'redis';
+  if (has('libsql') || has('sqld')) return 'libsql';
+  if (has('db') || has('postgres') || has('postgresql') || has('pg') || has('database')) return 'postgres';
+  return undefined;
+}
 
 /** A container's node status; a deploy in progress wins while the container itself is fine. */
 function containerStatus(c: ComposeContainer, service: ServiceStatus): ServiceStatus {
@@ -111,6 +158,14 @@ export class Collector {
   private metrics = new Map<string, Metric>();
   /** Container keys per service id (main container first, then by name, so node order is stable). */
   private containerKeys = new Map<string, string[]>();
+  private kuma: KumaState | null = null;
+  /** One probe before each round; see Backoff. */
+  private gate = new Backoff();
+  private extras: Extras = {};
+  /** TLS days left per domain host (null: no certificate / unreachable). */
+  private certs = new Map<string, number | null>();
+  /** Last time each container node was seen, so a container missing for a moment keeps its rack. */
+  private seen = new Map<string, number>();
   /** Compose stacks' containers by service id, from Dokploy's label match. */
   private composeContainers = new Map<string, ComposeContainer[]>();
   private netHistory = new Map<string, NetSample[]>();
@@ -133,7 +188,7 @@ export class Collector {
     return this.once('bootstrap', async () => {
       await Promise.allSettled([this.refreshStructure(), this.refreshDeployments()]);
       this.commit();
-      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
+      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras(), this.refreshDetails().then(() => this.refreshCerts()), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
         this.commit(),
       );
     });
@@ -141,12 +196,22 @@ export class Collector {
 
   tick() {
     return this.once('tick', async () => {
+      if (!this.gate.allowed(Date.now())) return;
+      try {
+        await this.t('/healthz', 4_000);
+        this.gate.ok();
+      } catch {
+        this.gate.fail(Date.now());
+        this.setStatus({ state: 'error', message: '3Dokploy is restarting…', syncedAt: this.status.syncedAt });
+        return;
+      }
       const n = ++this.ticks;
       const jobs = [this.refreshStructure(), this.refreshRunningLogs()];
       // The container list (`docker ps` on the Dokploy host, per stack and per open tab) only changes
       // on deploys: refresh it every 30 s; the stats in between use the cached list.
-      if (n % 2 === 0) jobs.push(this.refreshDeployments(), (n % 6 === 0 ? this.refreshContainers() : Promise.resolve()).then(() => this.refreshStats()));
-      if (n % 60 === 0) jobs.push(this.refreshDetails());
+      if (n % 2 === 0)
+        jobs.push(this.refreshDeployments(), (n % 6 === 0 ? this.refreshContainers() : Promise.resolve()).then(() => this.refreshStats()), this.refreshKuma(), this.refreshExtras());
+      if (n % 60 === 0) jobs.push(this.refreshDetails().then(() => this.refreshCerts()));
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
       this.commit();
@@ -246,6 +311,121 @@ export class Collector {
     });
   }
 
+  private async refreshKuma() {
+    if (this.kuma && !this.kuma.enabled) return; // not configured: ask once, then stay quiet
+    try {
+      this.kuma = await fetchKuma(this.t);
+      if (this.kuma.error) this.warn('kuma', new Error(this.kuma.error));
+    } catch (e) {
+      this.warn('kuma', e);
+    }
+  }
+
+  /** Kuma monitors that are down, keyed by the host of their URL. */
+  private kumaDown() {
+    const down = new Map<string, string[]>();
+    for (const m of this.kuma?.monitors ?? []) {
+      const host = m.status === 0 && m.url ? hostOf(m.url) : null;
+      if (host) down.set(host, [...(down.get(host) ?? []), m.name]);
+    }
+    return down;
+  }
+
+  /** Container flows → links between nodes (one per pair, ports merged) and outgoing counts per node. */
+  private links(byContainer: Map<string, string>): { links?: Link[]; egress?: Record<string, number> } {
+    const flows = this.extras.flows;
+    if (!flows?.enabled || flows.error) return {};
+    const pairs = new Map<string, Link>();
+    const egress: Record<string, number> = {};
+    for (const f of flows.flows) {
+      const from = byContainer.get(f.from);
+      if (!from) continue;
+      if (f.to === 'internet') {
+        egress[from] = (egress[from] ?? 0) + f.conns;
+        continue;
+      }
+      const to = byContainer.get(f.to);
+      if (!to || to === from) continue;
+      const key = `${from}>${to}`;
+      const l = pairs.get(key) ?? { from, to, ports: [], conns: 0 };
+      if (!l.ports.includes(f.port)) l.ports.push(f.port);
+      l.conns += f.conns;
+      pairs.set(key, l);
+    }
+    for (const l of pairs.values()) l.ports.sort((a, b) => a - b);
+    return { links: [...pairs.values()].sort((a, b) => b.conns - a.conns), egress };
+  }
+
+  /** Slowest response time per URL host across Kuma monitors. */
+  private kumaLatency() {
+    const out = new Map<string, number>();
+    for (const m of this.kuma?.monitors ?? []) {
+      if (m.responseMs === undefined || !m.url) continue;
+      const host = hostOf(m.url);
+      if (host) out.set(host, Math.max(out.get(host) ?? 0, m.responseMs));
+    }
+    return out;
+  }
+
+  /** The optional integrations of the 3Dokploy server; one that answers "not configured" isn't asked again. */
+  private async refreshExtras() {
+    const names = ['glitchtip', 'umami', 'crowdsec', 'host', 'backups', 'flows'] as const;
+    await Promise.allSettled(
+      names.map(async (name) => {
+        if (this.extras[name]?.enabled === false) return;
+        try {
+          const next = await fetchExtra(this.t, name);
+          (this.extras as Record<string, unknown>)[name] = next;
+          if ('error' in next && next.error) this.warn(name, new Error(next.error));
+        } catch (e) {
+          this.warn(name, e);
+        }
+      }),
+    );
+  }
+
+  /** Hosts Kuma watches or Umami counts: real public sites, also those Dokploy doesn't route. */
+  private publicHosts() {
+    const hosts = new Set<string>();
+    for (const m of this.kuma?.monitors ?? []) {
+      const h = m.url ? hostOf(m.url) : null;
+      if (h) hosts.add(h);
+    }
+    for (const site of this.extras.umami?.sites ?? []) hosts.add(site.domain.toLowerCase());
+    return [...hosts];
+  }
+
+  private async refreshCerts() {
+    const hosts = [...new Set([...[...this.details.values()].flatMap((d) => d.domains), ...this.publicHosts()])].filter((h) => !/^(\d+\.){3}\d+(:\d+)?$|:/.test(h));
+    if (!hosts.length) return;
+    try {
+      const { certs } = await fetchCerts(this.t, hosts);
+      for (const [h, days] of Object.entries(certs)) this.certs.set(h, days);
+    } catch (e) {
+      this.warn('certs', e);
+    }
+  }
+
+  /**
+   * GlitchTip projects → nodes: a container of that name (maklerfotos-worker), else the service of
+   * that name (kinderbuch), else the service named like its first part (broccoli-web → broccoli).
+   */
+  private attachErrors(nodes: Service[], services: Service[]) {
+    const projects = this.extras.glitchtip?.projects ?? [];
+    if (!projects.length) return;
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const byContainer = new Map(nodes.filter((n) => n.container).map((n) => [n.container!.toLowerCase(), n]));
+    const byName = new Map(services.map((s) => [s.name.toLowerCase(), byId.get(s.id)]));
+    for (const p of projects) {
+      const slug = p.project.toLowerCase();
+      const node = byContainer.get(slug) ?? byName.get(slug) ?? byName.get(slug.split('-')[0]);
+      if (!node) continue;
+      node.errors = (node.errors ?? 0) + p.unresolved;
+      node.errorAt = Math.max(node.errorAt ?? 0, p.lastSeen);
+      node.issues = [...(node.issues ?? []), ...(p.issues ?? [])].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 5);
+    }
+  }
+
   private async refreshStats() {
     if (!this.structure) return;
     let stats: ContainerStat[];
@@ -261,7 +441,13 @@ export class Collector {
       const names = new Set(listed?.map((c) => c.name));
       const own = stats.filter((c) => names.has(c.name) || belongsTo(c.name, svc.appName!));
       this.measure(svc.id, own, now);
-      const keys = (listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))]).sort(byRole);
+      const current = listed ? [...names] : [...new Set(own.map((c) => containerKey(c.name)))];
+      for (const key of current) this.seen.set(containerNodeId(svc.id, key), now);
+      // Keep containers seen in the last minute (a redeploy recreates them), so buildings don't jump.
+      const recent = (this.containerKeys.get(svc.id) ?? []).filter(
+        (k) => !current.includes(k) && now - (this.seen.get(containerNodeId(svc.id, k)) ?? 0) < GRACE_MS,
+      );
+      const keys = [...current, ...recent].sort(byRole);
       this.containerKeys.set(svc.id, keys);
       for (const key of keys) this.measure(containerNodeId(svc.id, key), own.filter((c) => containerKey(c.name) === key), now);
     }
@@ -335,11 +521,28 @@ export class Collector {
       if (d.status === 'success' && at > (lastDeploy.get(d.serviceId) ?? 0)) lastDeploy.set(d.serviceId, at);
     }
 
+    const kumaDown = this.kumaDown();
+    const latency = this.kumaLatency();
+    const visitors = new Map((this.extras.umami?.sites ?? []).map((x) => [bareHost(x.domain), x.visitors]));
+    const sites = this.publicHosts();
     const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
+      // Domains routed outside Dokploy (e.g. a Traefik file config) are unknown to it: guess by name.
+      const domains = det?.domains.length ? det.domains : guessDomains(svc.name, sites);
+      // A Kuma monitor on one of the service's domains is down: Docker may say "running", users don't.
+      const failing = svc.status === 'deploying' ? [] : domains.flatMap((d) => kumaDown.get(d) ?? []);
+      const ms = domains.map((d) => latency.get(d)).filter((x): x is number => x !== undefined);
+      const seen = domains.map((d) => visitors.get(bareHost(d))).filter((x): x is number => x !== undefined);
+      const days = domains.map((d) => this.certs.get(d)).filter((x): x is number => typeof x === 'number');
+      const single = this.containerKeys.get(svc.id);
       const node: Service = {
         ...svc,
+        ...(failing.length ? { status: 'error' as const, incident: `Kuma: ${failing.join(', ')} down` } : {}),
+        container: single?.length === 1 ? single[0] : undefined,
+        latencyMs: ms.length ? Math.max(...ms) : undefined,
+        visitors: seen.length ? seen.reduce((a, b) => a + b, 0) : undefined,
+        certDays: days.length ? Math.min(...days) : undefined,
         domain: det?.domain,
         source: det?.source,
         replicas: det?.replicas ?? svc.replicas,
@@ -357,15 +560,32 @@ export class Collector {
       return keys.map((key, i) => {
         const cm = this.metrics.get(containerNodeId(svc.id, key));
         const c = listed.get(key);
+        // A failed deploy (or a Kuma monitor that is down) leaves the containers running: the first
+        // node, which keeps the service id and carries deploys and alerts, keeps the error.
+        const status = c
+          ? i === 0 && node.status === 'error'
+            ? 'error'
+            : containerStatus(c, node.status)
+          : listed.size
+            ? i === 0 && node.status === 'error'
+              ? 'error'
+              : 'idle' // gone for the moment (within the grace period)
+            : node.status;
         return {
           ...node,
-          // A failed deploy leaves the old containers running: the first node (it keeps the service id,
-          // deploys and alerts hang off it) keeps Dokploy's error.
-          status: c ? (i === 0 && node.status === 'error' ? 'error' : containerStatus(c, node.status)) : node.status,
+          status,
+          incident: i === 0 ? node.incident : status === 'error' && c ? `${key}: ${c.status}` : undefined,
+          peerId: i > 0 && HELPER.test(key) && !INTERNET.test(key) ? svc.id : undefined,
           id: i === 0 ? svc.id : containerNodeId(svc.id, key),
           name: containerLabel(key, svc.appName ?? ''),
           description: `${svc.name} · container ${key}`,
+          container: key,
+          kind: (i > 0 && dbKind(key)) || node.kind,
           domain: i === 0 ? node.domain : undefined,
+          // the site's numbers belong to the app, not to its database
+          latencyMs: i === 0 ? node.latencyMs : undefined,
+          visitors: i === 0 ? node.visitors : undefined,
+          certDays: i === 0 ? node.certDays : undefined,
           replicas: 1,
           memLimitMb: cm?.memLimitMb || node.memLimitMb,
           cpu: cm?.cpu ?? 0,
@@ -377,9 +597,23 @@ export class Collector {
       });
     });
 
+    this.attachErrors(services, s.services);
+    const byContainer = new Map(services.filter((x) => x.container).map((x) => [x.container!, x.id]));
+    const { host, crowdsec, backups } = this.extras;
     const servers = s.servers.map((sv) =>
       sv.id === 'local'
-        ? { ...sv, name: this.host.hostname ?? sv.name, host: this.host.host, vcpu: this.host.vcpu, ramGb: this.host.ramGb }
+        ? {
+            ...sv,
+            name: this.host.hostname ?? sv.name,
+            host: this.host.host,
+            vcpu: this.host.vcpu,
+            ramGb: this.host.ramGb,
+            diskUsed: host?.diskUsed ?? undefined,
+            memUsed: host?.memUsed ?? undefined,
+            ...(crowdsec?.enabled && !crowdsec.error ? { bansActive: crowdsec.active, bansToday: crowdsec.today, banAt: crowdsec.lastAt || undefined } : {}),
+            backups: backups?.enabled ? backups.backups.map((b) => ({ ...b, nodeId: byContainer.get(b.name) })) : undefined,
+            ...this.links(byContainer),
+          }
         : sv,
     );
 
@@ -407,7 +641,7 @@ export class Collector {
           serviceId: svc.id,
           severity: 'critical',
           title: 'Node in error state',
-          message: `Dokploy reports ${svc.name} as errored`,
+          message: svc.incident ?? `Dokploy reports ${svc.name} as errored`,
           createdAt: this.errorSince.get(id)!,
         });
       } else if (this.errorSince.has(id)) {

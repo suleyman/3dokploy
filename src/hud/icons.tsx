@@ -18,6 +18,15 @@ const base = (p: P) => ({
 /** The app icon: same file as the favicon and the Dokploy template logo. */
 export const Logo = () => <img className="brand-logo" src="/favicon.svg" width={26} height={26} alt="" />;
 
+/** Wall-display tour: a screen with a play mark. */
+export const TourIcon = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="12" rx="2" />
+    <path d="m10 8 4 2-4 2z" />
+    <path d="M8 20h8" />
+  </svg>
+);
+
 export const SearchIcon = (p: P) => (
   <svg {...base(p)}>
     <circle cx="11" cy="11" r="7" />

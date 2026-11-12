@@ -39,3 +39,19 @@ export const TRIGGER_LABEL: Record<DeployTrigger, string> = {
   push: 'git push',
   manual: 'manual',
 };
+
+/** Building colour presets (the same tones the projects get automatically, by name). */
+export const PRESETS = [
+  { key: 'violet', label: 'Violet', hex: '#7c6cff' },
+  { key: 'cyan', label: 'Cyan', hex: '#2de2ff' },
+  { key: 'green', label: 'Green', hex: '#2bd98a' },
+  { key: 'amber', label: 'Amber', hex: '#ffb547' },
+  { key: 'pink', label: 'Pink', hex: '#ff5fa2' },
+  { key: 'blue', label: 'Blue', hex: '#4f8bff' },
+  { key: 'purple', label: 'Purple', hex: '#c86bff' },
+  { key: 'orange', label: 'Orange', hex: '#ff7a45' },
+  { key: 'teal', label: 'Teal', hex: '#1fd1c1' },
+  { key: 'lime', label: 'Lime', hex: '#d4f54a' },
+  { key: 'sky', label: 'Sky', hex: '#8fd3ff' },
+] as const;
+export const presetHex = (key?: string) => PRESETS.find((p) => p.key === key)?.hex;

@@ -1819,3 +1819,272 @@ a:focus-visible {
   color: var(--crit-text);
   overflow-wrap: anywhere;
 }
+
+/* ---- rack badges (GlitchTip errors, TLS expiry) and the gate panel ---------------------- */
+.rack-badges {
+  display: flex;
+  gap: 4px;
+  pointer-events: none;
+}
+.badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font: 600 10px/1.5 var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+}
+.badge-warn {
+  color: #ffd23d;
+  border-color: rgba(255, 210, 61, 0.55);
+}
+.badge-crit {
+  color: #ff5470;
+  border-color: rgba(255, 84, 112, 0.6);
+}
+.gate-panel {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+  font: 500 11px/1.4 var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.gate-panel strong {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.gate-panel .is-alert {
+  color: #ff5470;
+}
+.gate-panel .is-warn {
+  color: #ffd23d;
+}
+.vault-panel {
+  display: grid;
+  gap: 1px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+  font: 500 10px/1.45 var(--mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.vault-panel .is-stale {
+  color: #ff5470;
+}
+.log-lines {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font: 11px/1.45 var(--mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---- building settings (project panel) ------------------------------------------------- */
+.building-settings {
+  display: grid;
+  gap: 8px;
+}
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.swatch-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--swatch);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--swatch) 55%, transparent);
+  cursor: pointer;
+}
+.swatch-btn.auto {
+  width: auto;
+  padding: 0 8px;
+  border-radius: 11px;
+  background: transparent;
+  border-color: var(--border-strong);
+  box-shadow: none;
+  color: var(--text);
+  font: 600 10px/18px var(--mono);
+}
+.swatch-btn.is-on {
+  border-color: var(--text);
+}
+.swatch-btn:focus-visible {
+  outline: 2px solid var(--neon);
+  outline-offset: 2px;
+}
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.text-btn {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 500 12px/1.4 var(--font);
+  cursor: pointer;
+}
+.text-btn:hover {
+  border-color: var(--neon);
+}
+.complex-select,
+.complex-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 500 12px/1.4 var(--font);
+}
+.complex-label {
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--panel-solid);
+  color: var(--text);
+  font: 700 11px/1.5 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ---- inspector: incident banner and GlitchTip issues ------------------------------------- */
+.incident-banner {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--crit) 55%, transparent);
+  background: var(--crit-soft);
+  color: var(--crit-text);
+  font: 500 12px/1.45 var(--font);
+}
+.issue-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.issue-list li {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-left: 3px solid #ffd23d;
+  background: rgba(0, 0, 0, 0.25);
+}
+.issue-title {
+  font: 600 12px/1.4 var(--font);
+  overflow-wrap: anywhere;
+}
+.issue-culprit {
+  font-size: 11px;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+.issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  color: var(--neon);
+  font: 500 11px/1.4 var(--font);
+  text-decoration: none;
+}
+.issue-link:hover {
+  text-decoration: underline;
+}
+.issue-link svg {
+  width: 11px;
+  height: 11px;
+}
+.link-label {
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(182, 255, 74, 0.55);
+  background: var(--panel-solid);
+  color: #d8ff9e;
+  font: 600 10px/1.5 var(--mono);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.talk-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.talk-list button {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-left: 3px solid #b6ff4a;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font: 500 12px/1.4 var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+.talk-list button:hover {
+  border-color: #b6ff4a;
+}
+
+/* Tour caption: what the camera shows and why */
+.tour-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 10px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font: 600 15px/1.35 var(--font);
+  pointer-events: none;
+}
+.tour-caption-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--neon);
+  box-shadow: 0 0 8px var(--neon);
+}
+.tour-caption strong {
+  display: block;
+  font-weight: 700;
+}
+.tour-caption-why {
+  display: block;
+  color: var(--text-2);
+  font: 500 13px/1.35 var(--font);
+}

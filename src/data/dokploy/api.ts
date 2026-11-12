@@ -195,6 +195,8 @@ export function normalize(rawProjects: Raw[]): Structure {
 
 export interface Details {
   domain?: string;
+  /** Every domain host of the service (the first one is `domain`). */
+  domains: string[];
   source?: string;
   replicas?: number;
   memLimitMb?: number;
@@ -231,6 +233,7 @@ export async function fetchDetails(t: Transport, kind: ServiceKind, id: string):
   const memBytes = Number(s.memoryLimit);
   return {
     domain: str(domains[0]?.host),
+    domains: domains.map((d) => str(d.host)).filter((h): h is string => !!h),
     source: sourceOf(s),
     replicas: typeof s.replicas === 'number' && s.replicas > 0 ? s.replicas : undefined,
     memLimitMb: Number.isFinite(memBytes) && memBytes > 0 ? Math.round(memBytes / 1048576) : undefined,
@@ -322,6 +325,37 @@ export async function fetchComposeContainers(t: Transport, appName: string): Pro
     .map((c) => ({ name: String(c.name ?? ''), state: String(c.state ?? ''), status: String(c.status ?? '') }))
     .filter((c) => c.name && !finishedOneShot(c));
 }
+
+export interface KumaState {
+  enabled: boolean;
+  monitors: { name: string; type: string; url?: string; status: number; responseMs?: number }[];
+  error?: string;
+}
+
+export interface Extras {
+  glitchtip?: {
+    enabled: boolean;
+    projects: { project: string; unresolved: number; events: number; lastSeen: number; issues?: NonNullable<Service['issues']> }[];
+    error?: string;
+  };
+  umami?: { enabled: boolean; sites: { domain: string; visitors: number }[]; error?: string };
+  crowdsec?: { enabled: boolean; active?: number; today?: number; lastAt?: number; error?: string };
+  host?: { enabled: boolean; diskUsed: number | null; memUsed: number | null };
+  backups?: { enabled: boolean; backups: { name: string; newest: number; sizeMb: number; files: number }[]; error?: string };
+  flows?: { enabled: boolean; flows: { from: string; to: string; port: number; conns: number }[]; error?: string };
+}
+
+/** One optional integration of the 3Dokploy server (see server/extras.ts). */
+export const fetchExtra = <K extends keyof Extras>(t: Transport, name: K) => get<NonNullable<Extras[K]>>(t, `/api/${name}`);
+
+export const fetchCerts = (t: Transport, hosts: string[]) =>
+  get<{ certs: Record<string, number | null> }>(t, `/api/certs?hosts=${q(hosts.join(','))}`, 30_000);
+
+export const fetchContainerLogs = (t: Transport, container: string, tail = 40) =>
+  get<{ enabled: boolean; lines: string[]; error?: string }>(t, `/api/logs?container=${q(container)}&tail=${tail}`);
+
+/** Uptime Kuma monitor states via the 3Dokploy server (empty unless KUMA_URL/KUMA_API_KEY are set). */
+export const fetchKuma = (t: Transport) => get<KumaState>(t, '/api/kuma');
 
 /** Containers that belong to a Dokploy service: swarm tasks (`app.1.xyz`), compose (`app-web-1`) or stacks (`app_web.1`). */
 export const belongsTo = (container: string, appName: string) =>

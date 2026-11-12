@@ -56,7 +56,8 @@ function GlowLine({ x, z, w, d, color, intensity = 1.6 }: { x: number; z: number
 }
 
 export const Building = memo(function Building({ b }: { b: BuildingLayout }) {
-  const project = useStore((s) => s.projects[b.projectId]);
+  // a dissolved project's building stands as a ghost until its racks have been moved out
+  const project = useStore((s) => s.projects[b.projectId] ?? s.transit?.projects.find((p) => p.id === b.projectId));
   const environments = useStore((s) => s.environments);
   const services = useStore((s) => s.services);
   const color = project?.color ?? NEON;
@@ -178,7 +179,7 @@ export const Building = memo(function Building({ b }: { b: BuildingLayout }) {
 
 /** `labelled`: only name environments when a project has more than one. */
 const Zone = memo(function Zone({ zone, color, labelled }: { zone: ZoneLayout; color: string; labelled: boolean }) {
-  const env = useStore((s) => s.environments[zone.environmentId]);
+  const env = useStore((s) => s.environments[zone.environmentId] ?? s.transit?.environments.find((e) => e.id === zone.environmentId));
   const w = zone.x1 - zone.x0;
   const d = zone.z1 - zone.z0;
   const tint = useMemo(() => new THREE.Color(color), [color]);
