@@ -118,6 +118,10 @@ export interface State extends WorldSlice {
   muted: boolean;
   /** Wall-display mode: the camera tours buildings and stops at incidents. */
   tour: boolean;
+  /** Tour: the moving figure (see scene/actors) the camera follows right now. */
+  follow: string | null;
+  /** Tour: what is on screen and why, shown as a caption. */
+  tourCaption: { title: string; reason: string } | null;
   /** Building order, complexes and colour presets (shared through the server's /api/prefs). */
   prefs: MapPrefs;
   /** null while loading; false when the server can't store them (kept in this browser only). */
@@ -144,6 +148,8 @@ export interface State extends WorldSlice {
   toggleHeatmap(): void;
   toggleMute(): void;
   toggleTour(): void;
+  /** Tour: follow a moving figure (null stops), with a caption. */
+  setTourShot(shot: { follow?: string | null; caption: State['tourCaption'] }): void;
   setProjectColor(projectId: string, preset: string | null): void;
   /** Swaps a building with its neighbour (-1 earlier, 1 later) inside its complex, or among the buildings without one. */
   moveProject(projectId: string, dir: -1 | 1): void;
@@ -366,6 +372,8 @@ export const useStore = create<State>()((set, get) => ({
   search: '',
   heatmap: false,
   tour: false,
+  follow: null,
+  tourCaption: null,
   prefs: EMPTY_PREFS,
   prefsShared: null,
   moving: {},
@@ -501,7 +509,10 @@ export const useStore = create<State>()((set, get) => ({
     set((s) => ({ heatmap: !s.heatmap }));
   },
   toggleTour() {
-    set((s) => ({ tour: !s.tour }));
+    set((s) => ({ tour: !s.tour, follow: null, tourCaption: null, hoveredId: s.tour ? null : s.hoveredId }));
+  },
+  setTourShot({ follow = null, caption }) {
+    set({ follow, tourCaption: caption });
   },
   setProjectColor(projectId, preset) {
     updatePrefs((p) => {

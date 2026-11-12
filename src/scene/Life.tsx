@@ -16,6 +16,8 @@ import { useStore } from '../store';
 import { ACCENT, BG, NEON } from '../theme';
 import { Label } from './Label';
 import { TechModel, Walker, dampAngle } from './Agents';
+import { actors } from './actors';
+import { nextShot } from '../tour';
 
 // ---- visitors ------------------------------------------------------------------------
 
@@ -483,35 +485,48 @@ export function Sky() {
 
 // ---- tour --------------------------------------------------------------------------------
 
-const TOUR_STEP_MS = 9_000;
-
-/** Wall-display mode: incidents first (one after another), otherwise building by building. */
+/**
+ * Wall-display mode: a director (see tour.ts) picks what is worth watching right now (incidents,
+ * deploys, fresh errors, load, visitors, a technician at work, traffic) and shows it with a
+ * caption and the node's hover card, so nobody has to point at it.
+ */
 export function Tour() {
   const tour = useStore((s) => s.tour);
   useEffect(() => {
     if (!tour) return;
-    let k = 0;
+    const recent = new Map<string, number>();
+    let sinceOverview = 0;
+    let timer: ReturnType<typeof setTimeout>;
     const step = () => {
       const s = useStore.getState();
-      const incidents = Object.values(s.services)
-        .filter((x) => x.status === 'error')
-        .map((x) => x.id)
-        .sort();
-      if (incidents.length) return s.select(incidents[k++ % incidents.length]);
-      const projects = Object.values(s.projects)
-        .filter((p) => Object.values(s.services).some((x) => x.projectId === p.id))
-        .sort((a, b) => a.name.localeCompare(b.name));
-      if (!projects.length) return;
-      if (k % (projects.length + 1) === projects.length) {
-        k++;
+      const shot = nextShot({
+        services: Object.values(s.services),
+        projects: Object.values(s.projects),
+        deployments: Object.values(s.deployments),
+        actors: [...actors].map(([id, a]) => ({ id, kind: a.kind, ...a.info() })),
+        now: Date.now(),
+        recent,
+        sinceOverview,
+      });
+      recent.set(shot.key, Date.now());
+      sinceOverview = shot.overview ? 0 : sinceOverview + 1;
+      if (shot.select) s.select(shot.select);
+      else if (shot.project) s.focusProject(shot.project);
+      else {
         s.clearSelection();
-        return s.cameraCommand('reset'); // the overview once per round
+        if (shot.overview) s.cameraCommand('reset');
       }
-      s.focusProject(projects[k++ % (projects.length + 1)].id);
+      s.setTourShot({ follow: shot.follow ?? null, caption: { title: shot.caption, reason: shot.reason } });
+      s.hover(shot.hover ?? null);
+      timer = setTimeout(step, shot.ms);
     };
     step();
-    const id = setInterval(step, TOUR_STEP_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(timer);
+      const s = useStore.getState();
+      s.setTourShot({ caption: null });
+      s.hover(null);
+    };
   }, [tour]);
   return null;
 }

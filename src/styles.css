@@ -2088,3 +2088,40 @@ a:focus-visible {
 .talk-list button:hover {
   border-color: #b6ff4a;
 }
+
+/* Tour caption: what the camera shows and why */
+.tour-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 10px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font: 600 15px/1.35 var(--font);
+  pointer-events: none;
+}
+.tour-caption-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--neon);
+  box-shadow: 0 0 8px var(--neon);
+}
+.tour-caption strong {
+  display: block;
+  font-weight: 700;
+}
+.tour-caption-why {
+  display: block;
+  color: var(--text-2);
+  font: 500 13px/1.35 var(--font);
+}
