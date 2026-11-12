@@ -54,7 +54,8 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
       )}
       {svc.status === 'error' && <ErrorBalloon y={unitHeight(svc) + 0.75} />}
       {svc.sleeping && !dim && (
-        <Label position={[0, unitHeight(svc) + 0.45, 0]} zIndex={2}>
+        // beside the top, so the selection pin above the rack doesn't cover it
+        <Label position={[0.45, unitHeight(svc) + 0.3, 0]} anchor="left" zIndex={2}>
           <div className="rack-sleep" title={`Asleep (Sablier group ${svc.sleeping}): starts on the next request`}>
             z<span>z</span><span>z</span>
           </div>

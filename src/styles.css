@@ -1824,9 +1824,9 @@ a:focus-visible {
 /* Asleep (Sablier): drifting "zzz" above the rack */
 .rack-sleep {
   pointer-events: none;
-  font: 700 13px/1 var(--mono, ui-monospace, monospace);
-  color: var(--info-text);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  font: 800 18px/1 var(--mono, ui-monospace, monospace);
+  color: var(--text);
+  text-shadow: 0 0 6px var(--info), 0 1px 3px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
 }
 .rack-sleep span {
