@@ -9,6 +9,7 @@
  *   /api/logs       DOCKER_PROXY_URL (docker-socket-proxy)  last lines of one container
  *   /api/backups    BACKUP_STATUS_FILE                      newest dump per backup folder
  *   /api/flows      FLOW_STATUS_FILE + DOCKER_PROXY_URL     connections between containers
+ *   /api/sablier    DOCKER_PROXY_URL                        containers Sablier stops when idle
  *   /api/certs      (always)                                TLS days left per host
  *   /api/host       (always)                                disk + memory of the host
  */
@@ -302,6 +303,35 @@ export function flows() {
       return json(c, { enabled: true, flows: await load() });
     } catch (e) {
       return json(c, { enabled: true, flows: [], error: `Flows: ${errorOf(e)}` });
+    }
+  };
+}
+
+// ---- Sablier (stop when idle, start on the next request) ----------------------------------------
+
+export interface SablierContainer {
+  name: string;
+  group: string;
+  running: boolean;
+}
+
+/** Containers labelled for Sablier (`sablier.enable=true`), running or not. */
+export function mapSablier(containers: { Names?: string[]; State?: string; Labels?: Record<string, string> }[]): SablierContainer[] {
+  return containers
+    .map((c) => ({ name: c.Names?.[0]?.replace(/^\//, '') ?? '', group: c.Labels?.['sablier.group'] ?? 'default', running: c.State === 'running' }))
+    .filter((c) => c.name);
+}
+
+export function sablier() {
+  const proxy = base('DOCKER_PROXY_URL');
+  const filters = encodeURIComponent(JSON.stringify({ label: ['sablier.enable=true'] }));
+  const load = cached(10_000, async () => mapSablier((await getJson(`${proxy}/containers/json?all=1&filters=${filters}`, {})) as Parameters<typeof mapSablier>[0]));
+  return async (c: Context) => {
+    if (!proxy) return json(c, { enabled: false, containers: [] });
+    try {
+      return json(c, { enabled: true, containers: await load() });
+    } catch (e) {
+      return json(c, { enabled: true, containers: [], error: `Sablier: ${errorOf(e)}` });
     }
   };
 }

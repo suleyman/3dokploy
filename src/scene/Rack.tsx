@@ -53,6 +53,13 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
         <Cabinet svc={svc} dim={dim} heat={heatmap} />
       )}
       {svc.status === 'error' && <ErrorBalloon y={unitHeight(svc) + 0.75} />}
+      {svc.sleeping && !dim && (
+        <Label position={[0, unitHeight(svc) + 0.45, 0]} zIndex={2}>
+          <div className="rack-sleep" title={`Asleep (Sablier group ${svc.sleeping}): starts on the next request`}>
+            z<span>z</span><span>z</span>
+          </div>
+        </Label>
+      )}
       <Burn level={trouble(svc)} y={unitHeight(svc)} />
       <Sparks at={svc.errorAt} y={unitHeight(svc)} />
       {!dim && (!!svc.errors || (svc.certDays !== undefined && svc.certDays < 14)) && (

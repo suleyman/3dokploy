@@ -303,7 +303,7 @@ export class Collector {
     await mapLimit(stacks, 2, async (svc) => {
       if (failed) return;
       try {
-        this.composeContainers.set(svc.id, await fetchComposeContainers(this.t, svc.appName!));
+        this.composeContainers.set(svc.id, await fetchComposeContainers(this.t, svc.appName!, (name) => this.asleep().has(name)));
       } catch (e) {
         failed = true;
         this.warn('containers', e);
@@ -367,9 +367,14 @@ export class Collector {
     return out;
   }
 
+  /** Containers Sablier stopped while idle: name → Sablier group. */
+  private asleep() {
+    return new Map((this.extras.sablier?.containers ?? []).filter((c) => !c.running).map((c) => [c.name, c.group]));
+  }
+
   /** The optional integrations of the 3Dokploy server; one that answers "not configured" isn't asked again. */
   private async refreshExtras() {
-    const names = ['glitchtip', 'umami', 'crowdsec', 'host', 'backups', 'flows'] as const;
+    const names = ['glitchtip', 'umami', 'crowdsec', 'host', 'backups', 'flows', 'sablier'] as const;
     await Promise.allSettled(
       names.map(async (name) => {
         if (this.extras[name]?.enabled === false) return;
@@ -525,6 +530,7 @@ export class Collector {
     const latency = this.kumaLatency();
     const visitors = new Map((this.extras.umami?.sites ?? []).map((x) => [bareHost(x.domain), x.visitors]));
     const sites = this.publicHosts();
+    const asleep = this.asleep();
     const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
@@ -554,27 +560,36 @@ export class Collector {
         containers: m?.containers,
         lastDeploy: lastDeploy.get(svc.id) ?? null,
       };
+      // Asleep (Sablier) is not down: idle, no incident, and a deploy in progress still shows.
+      const napOf = (name?: string) => (name && node.status !== 'deploying' ? asleep.get(name) : undefined);
       const keys = this.containerKeys.get(svc.id) ?? [];
-      if (keys.length < 2) return [node];
+      if (keys.length < 2) {
+        const nap = napOf(node.container);
+        return [nap ? { ...node, status: 'idle' as const, incident: undefined, sleeping: nap } : node];
+      }
       const listed = new Map(this.composeContainers.get(svc.id)?.map((c) => [c.name, c]));
       return keys.map((key, i) => {
         const cm = this.metrics.get(containerNodeId(svc.id, key));
         const c = listed.get(key);
+        const nap = napOf(key);
         // A failed deploy (or a Kuma monitor that is down) leaves the containers running: the first
         // node, which keeps the service id and carries deploys and alerts, keeps the error.
-        const status = c
-          ? i === 0 && node.status === 'error'
-            ? 'error'
-            : containerStatus(c, node.status)
-          : listed.size
+        const status = nap
+          ? 'idle'
+          : c
             ? i === 0 && node.status === 'error'
               ? 'error'
-              : 'idle' // gone for the moment (within the grace period)
-            : node.status;
+              : containerStatus(c, node.status)
+            : listed.size
+              ? i === 0 && node.status === 'error'
+                ? 'error'
+                : 'idle' // gone for the moment (within the grace period)
+              : node.status;
         return {
           ...node,
           status,
-          incident: i === 0 ? node.incident : status === 'error' && c ? `${key}: ${c.status}` : undefined,
+          sleeping: nap,
+          incident: nap ? undefined : i === 0 ? node.incident : status === 'error' && c ? `${key}: ${c.status}` : undefined,
           peerId: i > 0 && HELPER.test(key) && !INTERNET.test(key) ? svc.id : undefined,
           id: i === 0 ? svc.id : containerNodeId(svc.id, key),
           name: containerLabel(key, svc.appName ?? ''),

@@ -317,13 +317,14 @@ export const finishedOneShot = (c: ComposeContainer) => c.state === 'exited' && 
 
 /**
  * Containers of one compose stack, matched by label, so fixed `container_name`s are found too.
- * Dokploy lists them with `docker ps -a`; containers that exited cleanly are left out.
+ * Dokploy lists them with `docker ps -a`; containers that exited cleanly are left out, except those
+ * `keep` names (a container Sablier stopped exits cleanly too, but it is asleep, not finished).
  */
-export async function fetchComposeContainers(t: Transport, appName: string): Promise<ComposeContainer[]> {
+export async function fetchComposeContainers(t: Transport, appName: string, keep?: (name: string) => boolean): Promise<ComposeContainer[]> {
   const raw = await get<Raw[]>(t, `/api/docker.getContainersByAppNameMatch?appName=${q(appName)}&appType=docker-compose`);
   return raw
     .map((c) => ({ name: String(c.name ?? ''), state: String(c.state ?? ''), status: String(c.status ?? '') }))
-    .filter((c) => c.name && !finishedOneShot(c));
+    .filter((c) => c.name && (!finishedOneShot(c) || !!keep?.(c.name)));
 }
 
 export interface KumaState {
@@ -343,6 +344,7 @@ export interface Extras {
   host?: { enabled: boolean; diskUsed: number | null; memUsed: number | null };
   backups?: { enabled: boolean; backups: { name: string; newest: number; sizeMb: number; files: number }[]; error?: string };
   flows?: { enabled: boolean; flows: { from: string; to: string; port: number; conns: number }[]; error?: string };
+  sablier?: { enabled: boolean; containers: { name: string; group: string; running: boolean }[]; error?: string };
 }
 
 /** One optional integration of the 3Dokploy server (see server/extras.ts). */

@@ -1821,6 +1821,43 @@ a:focus-visible {
 }
 
 /* ---- rack badges (GlitchTip errors, TLS expiry) and the gate panel ---------------------- */
+/* Asleep (Sablier): drifting "zzz" above the rack */
+.rack-sleep {
+  pointer-events: none;
+  font: 700 13px/1 var(--mono, ui-monospace, monospace);
+  color: var(--info-text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+.rack-sleep span {
+  display: inline-block;
+  font-size: 1.25em;
+  transform: translateY(-0.3em);
+}
+.rack-sleep span + span {
+  font-size: 1.5em;
+  transform: translateY(-0.7em);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rack-sleep {
+    animation: rack-sleep 3s ease-in-out infinite;
+  }
+}
+@keyframes rack-sleep {
+  50% {
+    opacity: 0.45;
+    transform: translateY(-4px);
+  }
+}
+.sleep-banner {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-solid);
+  color: var(--text-2);
+  font: 500 12px/1.45 var(--font);
+}
 .rack-badges {
   display: flex;
   gap: 4px;

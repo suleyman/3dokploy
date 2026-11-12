@@ -103,6 +103,8 @@ export interface Service {
   incident?: string;
   /** Docker container name, when the node is one container. */
   container?: string;
+  /** Stopped by Sablier while idle (starts again on the next request): the Sablier group. */
+  sleeping?: string;
   /** GlitchTip (optional): unresolved issues and epoch ms of the newest event. */
   errors?: number;
   errorAt?: number;

@@ -63,6 +63,12 @@ export function Inspector() {
         </p>
       )}
 
+      {svc.sleeping && (
+        <p className="sleep-banner">
+          Asleep: Sablier stopped it while idle (group <code>{svc.sleeping}</code>). The next request starts it again.
+        </p>
+      )}
+
       {!!svc.issues?.length && (
         <section>
           <h3 className="section-title">
