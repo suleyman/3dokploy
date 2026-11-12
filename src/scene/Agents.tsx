@@ -11,6 +11,8 @@ import { cartRoute, routeBetween, routeFromHome, routeHome, type Layout, type V3
 import { useStore } from '../store';
 import { Label } from './Label';
 import { trouble } from '../trouble';
+import { pct } from '../format';
+import { useActor, type Actor } from './actors';
 
 const CART_SPEED = 3.2;
 const TECH_SPEED = 2.3;
@@ -135,6 +137,9 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
 
   const group = useRef<THREE.Group>(null);
   const chassis = useRef<THREE.Group>(null);
+  const serviceId = dep?.serviceId ?? null;
+  const actor = useMemo<Actor>(() => ({ kind: 'cart', obj: group, info: () => ({ phase: sim.current.phase, target: serviceId }) }), [serviceId]);
+  useActor(`cart-${deploymentId}`, actor);
   const terminal = !dep || dep.status === 'success' || dep.status === 'failed';
   const terminalRef = useRef(terminal);
   terminalRef.current = terminal;
@@ -299,6 +304,23 @@ function Technician({ layout, index, crew }: { layout: Layout; index: number; cr
   const servicesRef = useRef(services);
   servicesRef.current = services;
   const [checking, setChecking] = useState<string | null>(null);
+  /** What he is doing and why, shown over his head the whole time. */
+  const [task, setTask] = useState<string>('Starting the shift');
+  const why = (id: string | null) => {
+    const svc = id ? servicesRef.current[id] : undefined;
+    if (!svc) return 'routine round';
+    if (svc.status === 'deploying') return 'a deploy is running there';
+    if (trouble(svc)) return `rack under heavy load (CPU ${pct(svc.cpu)})`;
+    return svc.cpu >= 0.5 ? `busy rack (CPU ${pct(svc.cpu)})` : 'routine round';
+  };
+  const describe = (phase: TechPhase, id: string | null) => {
+    const svc = id ? servicesRef.current[id] : undefined;
+    const name = svc?.name ?? 'a rack';
+    if (phase === 'walk') return `→ ${name} · incident: ${svc?.incident ?? 'down'}`;
+    if (phase === 'patrol') return `→ ${name} · ${why(id)}`;
+    if (phase === 'home') return '→ depot · round done, short break';
+    return null;
+  };
 
   const [mode, setMode] = useState<TechPhase>('idle');
   const sim = useRef({
@@ -328,6 +350,8 @@ function Technician({ layout, index, crew }: { layout: Layout; index: number; cr
   const legR = useRef<THREE.Group>(null);
   const armL = useRef<THREE.Group>(null);
   const armR = useRef<THREE.Group>(null);
+  const actor = useMemo<Actor>(() => ({ kind: 'tech', obj: root, info: () => ({ phase: sim.current.phase, target: sim.current.target ?? sim.current.at }) }), []);
+  useActor(`tech-${index}`, actor);
 
   useFrame((_, rawDt) => {
     const st = sim.current;
@@ -342,6 +366,8 @@ function Technician({ layout, index, crew }: { layout: Layout; index: number; cr
       st.walker = new Walker(path);
       st.target = target;
       setMode(phase);
+      const text = describe(phase, target);
+      if (text) setTask(text);
       return true;
     };
     const next = () => {
@@ -408,6 +434,7 @@ function Technician({ layout, index, crew }: { layout: Layout; index: number; cr
           st.walker = null;
           st.restUntil = st.t + REST_S;
           setMode('idle');
+          setTask('On a break at the depot');
         }
         break;
     }
@@ -444,19 +471,20 @@ function Technician({ layout, index, crew }: { layout: Layout; index: number; cr
       <group ref={body}>
         <TechModel legL={legL} legR={legR} armL={armL} armR={armR} />
       </group>
-      {mode === 'work' && (
-        <Label position={[0, 1.6, 0]} zIndex={9}>
+      <Label position={[0, 1.6, 0]} zIndex={mode === 'work' ? 9 : 8}>
+        {mode === 'work' ? (
           <div className="bubble">
             <span className="bubble-spinner" />
-            Investigating…
+            Investigating {services[sim.current.at ?? '']?.name ?? 'the rack'} · {services[sim.current.at ?? '']?.incident ?? 'down'}
           </div>
-        </Label>
-      )}
-      {mode === 'inspect' && checking && (
-        <Label position={[0, 1.6, 0]} zIndex={8}>
-          <div className="bubble">Routine check · {services[checking]?.name ?? 'rack'}</div>
-        </Label>
-      )}
+        ) : mode === 'inspect' && checking ? (
+          <div className="bubble">
+            Checking {services[checking]?.name ?? 'rack'} · {why(checking)}
+          </div>
+        ) : (
+          <div className="bubble">{task}</div>
+        )}
+      </Label>
     </group>
   );
 }

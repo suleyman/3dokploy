@@ -78,3 +78,18 @@ export function MapControls() {
     </nav>
   );
 }
+
+/** Tour: what the camera shows right now and why. */
+export function TourCaption() {
+  const caption = useStore((s) => (s.tour ? s.tourCaption : null));
+  if (!caption) return null;
+  return (
+    <div className="tour-caption" role="status" aria-live="polite">
+      <span className="tour-caption-dot" />
+      <span>
+        <strong>{caption.title}</strong>
+        <span className="tour-caption-why">Why: {caption.reason}</span>
+      </span>
+    </div>
+  );
+}

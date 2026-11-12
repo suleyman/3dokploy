@@ -8,6 +8,7 @@ import { WALL, type BuildingLayout, type Layout } from '../layout';
 import { useStore } from '../store';
 import { ACCENT, BG, NEON } from '../theme';
 import { Agents } from './Agents';
+import { actors } from './actors';
 import { DataFlow } from './DataFlow';
 import { DeployBeams, Pulses } from './Effects';
 import { InfiniteGrid } from './InfiniteGrid';
@@ -24,6 +25,8 @@ const MAX_ZOOM = 160;
 const ZOOM_STEP = 1.35;
 /** Selecting a node from far away flies in to at least this zoom. */
 const NODE_ZOOM = 48;
+/** Tour: zoom while following a technician or a cart. */
+const FOLLOW_ZOOM = 60;
 /** How far (world units) the orbit target may wander outside the buildings. */
 const PAN_MARGIN = 8;
 
@@ -210,6 +213,12 @@ function offsetTarget(camera: THREE.Camera, point: THREE.Vector3, [ox, oy]: [num
   return out;
 }
 
+/** The user moved the camera's position by hand (pan, not rotate or zoom): end the tour. */
+function stopTour() {
+  const s = useStore.getState();
+  if (s.tour) s.toggleTour();
+}
+
 function CameraRig({ layout }: { layout: Layout }) {
   const camera = useThree((s) => s.camera) as THREE.OrthographicCamera;
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
@@ -218,6 +227,7 @@ function CameraRig({ layout }: { layout: Layout }) {
   const anim = useRef<CameraAnim | null>(null);
   const placed = useRef(false);
   const tmp = useMemo(() => new THREE.Vector3(), []);
+  const followAt = useMemo(() => new THREE.Vector3(), []);
   const sizeRef = useRef(size);
   sizeRef.current = size;
   const gl = useThree((s) => s.gl);
@@ -256,6 +266,7 @@ function CameraRig({ layout }: { layout: Layout }) {
     /** Move the picture by (dx, dy) screen pixels, sliding along the floor. */
     const panBy = (dx: number, dy: number) => {
       anim.current = null;
+      stopTour();
       camera.updateMatrixWorld();
       right.setFromMatrixColumn(camera.matrixWorld, 0).setY(0).normalize();
       up.setFromMatrixColumn(camera.matrixWorld, 1).setY(0);
@@ -341,7 +352,20 @@ function CameraRig({ layout }: { layout: Layout }) {
     };
     const onEnter = () => (over = true);
     const onLeave = () => (over = false);
+    // Middle/right drag pans through OrbitControls: a real drag (not a click) ends the tour.
+    let panFrom: { x: number; y: number } | null = null;
+    const onPanDown = (e: PointerEvent) => (panFrom = e.button === 1 || e.button === 2 ? { x: e.clientX, y: e.clientY } : null);
+    const onPanMove = (e: PointerEvent) => {
+      if (panFrom && Math.hypot(e.clientX - panFrom.x, e.clientY - panFrom.y) > 4) {
+        panFrom = null;
+        stopTour();
+      }
+    };
+    const onPanUp = () => (panFrom = null);
 
+    el.addEventListener('pointerdown', onPanDown, true);
+    el.addEventListener('pointermove', onPanMove, true);
+    el.addEventListener('pointerup', onPanUp, true);
     el.addEventListener('wheel', onWheel, { passive: false, capture: true });
     el.addEventListener('pointerdown', onDown, true);
     el.addEventListener('pointermove', onMove, true);
@@ -353,6 +377,9 @@ function CameraRig({ layout }: { layout: Layout }) {
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', release);
     return () => {
+      el.removeEventListener('pointerdown', onPanDown, true);
+      el.removeEventListener('pointermove', onPanMove, true);
+      el.removeEventListener('pointerup', onPanUp, true);
       el.removeEventListener('wheel', onWheel, true);
       el.removeEventListener('pointerdown', onDown, true);
       el.removeEventListener('pointermove', onMove, true);
@@ -382,7 +409,11 @@ function CameraRig({ layout }: { layout: Layout }) {
   // Any user input cancels a running camera animation.
   useEffect(() => {
     if (!controls) return;
-    const stop = () => (anim.current = null);
+    const stop = () => {
+      anim.current = null;
+      const s = useStore.getState();
+      if (s.follow) s.setTourShot({ caption: s.tourCaption }); // the user took the camera: stop following
+    };
     controls.addEventListener('start', stop);
     return () => controls.removeEventListener('start', stop);
   }, [controls]);
@@ -416,6 +447,7 @@ function CameraRig({ layout }: { layout: Layout }) {
               anim.current = { ...anim.current, zoom: Math.max(MIN_ZOOM, z / ZOOM_STEP) };
               break;
             case 'pan': {
+              stopTour(); // moving the view by hand ends the tour
               // Arrow keys: move one screen-step along the floor, relative to the current view.
               camera.updateMatrixWorld();
               const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).setY(0).normalize();
@@ -441,6 +473,15 @@ function CameraRig({ layout }: { layout: Layout }) {
 
   useFrame((_, dt) => {
     if (controls) clampTarget(controls, camera, layout);
+    // Tour: keep the followed figure in the middle of the screen.
+    const follow = useStore.getState().follow;
+    if (follow) {
+      const obj = actors.get(follow)?.obj.current;
+      if (obj) {
+        obj.getWorldPosition(followAt).setY(0.5);
+        anim.current = { target: followAt.clone(), zoom: FOLLOW_ZOOM };
+      } else useStore.getState().setTourShot({ caption: useStore.getState().tourCaption });
+    }
     const a = anim.current;
     if (!a || !controls) return;
     const k = still ? 1 : 1 - Math.exp(-dt * 7);
