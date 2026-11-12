@@ -8,7 +8,10 @@ import { RACK, TANK, type Layout, type Slot } from '../layout';
 import { matchesSearch, useStore } from '../store';
 import { ACCENT, KIND_COLOR, NEON } from '../theme';
 import { Label } from './Label';
-import { CABINET, CABINET_DOOR, DIM_OPACITY, GEO, TANK_BODY, heatColor, ledMaterial } from './materials';
+import { trouble, type Trouble } from '../trouble';
+
+export { trouble };
+import { CABINET, CABINET_DOOR, DIM_OPACITY, GEO, TANK_BODY, heatColor, ledMaterial, slowness } from './materials';
 
 const LED_ROWS = [0.36, 0.62, 0.88, 1.14, 1.4];
 const BASE_Y = 0.03; // building slab height
@@ -18,13 +21,14 @@ export const unitHeight = (svc: Service) => (isDb(svc.kind) ? 0.08 + TANK.h + TA
 /** One service in the scene: wiring (data, pointer events) around a dumb Cabinet / Tank. */
 export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
   const id = slot.serviceId;
-  const svc = useStore((s) => s.services[id]);
-  const project = useStore((s) => s.projects[slot.projectId]);
+  const svc = useStore((s) => s.services[id] ?? s.transit?.ghosts.find((g) => g.id === id));
+  const project = useStore((s) => s.projects[slot.projectId] ?? s.transit?.projects.find((p) => p.id === slot.projectId));
   const env = useStore((s) => s.environments[slot.environmentId]);
   const search = useStore((s) => s.search);
   const heatmap = useStore((s) => s.heatmap);
+  const moving = useStore((s) => !!s.moving[id]);
 
-  if (!svc) return null;
+  if (!svc || moving) return null; // a moving rack is drawn on the hand truck until it arrives
   const dim = !matchesSearch(svc, project, search, env);
 
   const over = (e: ThreeEvent<PointerEvent>) => {
@@ -49,6 +53,134 @@ export const ServiceUnit = memo(function ServiceUnit({ slot }: { slot: Slot }) {
         <Cabinet svc={svc} dim={dim} heat={heatmap} />
       )}
       {svc.status === 'error' && <ErrorBalloon y={unitHeight(svc) + 0.75} />}
+      {svc.sleeping && !dim && (
+        // beside the top, so the selection pin above the rack doesn't cover it
+        <Label position={[0.45, unitHeight(svc) + 0.3, 0]} anchor="left" zIndex={2}>
+          <div className="rack-sleep" title={`Asleep (Sablier group ${svc.sleeping}): starts on the next request`}>
+            z<span>z</span><span>z</span>
+          </div>
+        </Label>
+      )}
+      <Burn level={trouble(svc)} y={unitHeight(svc)} />
+      <Sparks at={svc.errorAt} y={unitHeight(svc)} />
+      {!dim && (!!svc.errors || (svc.certDays !== undefined && svc.certDays < 14)) && (
+        <Label position={[0, -0.05, RACK.d / 2 + 0.35]} zIndex={3}>
+          <div className="rack-badges">
+            {!!svc.errors && <span className="badge badge-warn" title={`${svc.errors} unresolved in GlitchTip`}>⚠ {svc.errors}</span>}
+            {svc.certDays !== undefined && svc.certDays < 14 && (
+              <span className={`badge ${svc.certDays < 5 ? 'badge-crit' : 'badge-warn'}`} title="TLS certificate expires soon">
+                TLS {svc.certDays}d
+              </span>
+            )}
+          </div>
+        </Label>
+      )}
+    </group>
+  );
+});
+
+// ---- sparks: a new GlitchTip event ----------------------------------------------------
+
+const SPARK_N = 14;
+const SPARK_S = 3.5;
+
+/** A burst of sparks when the newest error event of this node changes (never on first sight). */
+const Sparks = memo(function Sparks({ at, y }: { at?: number; y: number }) {
+  const seen = useRef(at);
+  const until = useRef(0);
+  const mesh = useRef<THREE.InstancedMesh>(null);
+  const still = useStore((s) => s.reducedMotion);
+  const dirs = useMemo(
+    () => Array.from({ length: SPARK_N }, () => new THREE.Vector3(Math.random() - 0.5, 0.6 + Math.random(), Math.random() - 0.5).multiplyScalar(1.6)),
+    [],
+  );
+  const tmp = useMemo(() => new THREE.Matrix4(), []);
+  useFrame(({ clock }) => {
+    const m = mesh.current;
+    if (!m) return;
+    const t = clock.elapsedTime;
+    if (at !== seen.current) {
+      if (seen.current !== undefined && (at ?? 0) > seen.current && !still) until.current = t + SPARK_S;
+      seen.current = at;
+    }
+    const left = until.current - t;
+    if (left <= 0) {
+      m.count = 0;
+      return;
+    }
+    const p = ((SPARK_S - left) % 0.9) / 0.9; // three short bursts
+    for (let i = 0; i < SPARK_N; i++) {
+      const d = dirs[i];
+      tmp.makeTranslation(d.x * p, y + 0.1 + d.y * p - 2.2 * p * p, d.z * p + 0.2);
+      m.setMatrixAt(i, tmp);
+    }
+    m.count = SPARK_N;
+    m.instanceMatrix.needsUpdate = true;
+  });
+  return (
+    <instancedMesh ref={mesh} args={[undefined, undefined, SPARK_N]} frustumCulled={false}>
+      <boxGeometry args={[0.04, 0.04, 0.04]} />
+      <meshBasicMaterial color="#ffe08a" toneMapped={false} />
+    </instancedMesh>
+  );
+});
+
+// ---- trouble: smoke under load, fire when down -------------------------------------
+
+const FLAMES = [
+  { x: 0, z: 0, s: 1, c: '#ffd23d' },
+  { x: -0.16, z: 0.05, s: 0.75, c: '#ff8a1f' },
+  { x: 0.15, z: -0.04, s: 0.8, c: '#ff6a1a' },
+  { x: 0.05, z: 0.12, s: 0.6, c: '#ff3d2e' },
+  { x: -0.06, z: -0.12, s: 0.65, c: '#ff9d2b' },
+];
+const PUFFS = 7;
+
+const Burn = memo(function Burn({ level, y }: { level: Trouble; y: number }) {
+  const flames = useRef<(THREE.Mesh | null)[]>([]);
+  const puffs = useRef<(THREE.Mesh | null)[]>([]);
+  const light = useRef<THREE.PointLight>(null);
+  const still = useStore((s) => s.reducedMotion);
+  const seed = useMemo(() => Math.random() * 100, []);
+
+  useFrame(({ clock }) => {
+    if (!level) return;
+    const t = clock.elapsedTime + seed;
+    flames.current.forEach((m, i) => {
+      if (!m) return;
+      const f = still ? 1 : 0.75 + Math.abs(Math.sin(t * (7 + i * 1.7)) * 0.35) + Math.sin(t * 13 + i) * 0.08;
+      m.scale.set(FLAMES[i].s, FLAMES[i].s * f, FLAMES[i].s);
+    });
+    if (light.current) light.current.intensity = still ? 2.2 : 1.8 + Math.sin(t * 17) * 0.5 + Math.sin(t * 7.3) * 0.4;
+    puffs.current.forEach((m, i) => {
+      if (!m) return;
+      const p = still ? i / PUFFS : (t * 0.45 + i / PUFFS) % 1; // 0 → 1 over the puff's life
+      m.position.set(Math.sin(i * 2.4 + t * 0.3) * 0.18 * p, 0.25 + p * 1.6, Math.cos(i * 1.7) * 0.12 * p);
+      m.scale.setScalar(0.12 + p * 0.32);
+      (m.material as THREE.MeshBasicMaterial).opacity = (level === 'fire' ? 0.5 : 0.35) * (1 - p) * Math.min(1, p * 5);
+    });
+  });
+
+  if (!level) return null;
+  return (
+    <group position-y={y}>
+      {level === 'fire' && (
+        <>
+          {FLAMES.map((f, i) => (
+            <mesh key={i} ref={(m) => (flames.current[i] = m)} position={[f.x, 0.22 * f.s, f.z]}>
+              <coneGeometry args={[0.14, 0.5, 10, 1, true]} />
+              <meshBasicMaterial color={f.c} toneMapped={false} transparent opacity={0.85} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+            </mesh>
+          ))}
+          <pointLight ref={light} color="#ff7a1a" intensity={2} distance={3.2} position={[0, 0.4, 0.3]} />
+        </>
+      )}
+      {Array.from({ length: PUFFS }, (_, i) => (
+        <mesh key={i} ref={(m) => (puffs.current[i] = m)}>
+          <sphereGeometry args={[1, 10, 8]} />
+          <meshBasicMaterial color={level === 'fire' ? '#2a2a33' : '#8a93a6'} transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ))}
     </group>
   );
 });
@@ -65,7 +197,7 @@ export function Cabinet({ svc, dim, heat }: UnitProps) {
   // `transparent` is baked into the shader program, so a dim toggle remounts the material (key).
   const fade = { transparent: dim, opacity: dim ? DIM_OPACITY : 1 };
   const mk = dim ? 'dim' : 'solid';
-  const led = ledMaterial(svc.status, dim);
+  const led = ledMaterial(svc.status, dim, slowness(svc.latencyMs));
   const kind = KIND_COLOR[svc.kind];
 
   return (

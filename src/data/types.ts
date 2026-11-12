@@ -4,12 +4,42 @@ export type ServiceStatus = 'running' | 'idle' | 'deploying' | 'error';
 export const DB_KINDS: readonly ServiceKind[] = ['postgres', 'redis', 'mongo', 'mysql', 'mariadb', 'libsql'];
 export const isDb = (kind: ServiceKind) => DB_KINDS.includes(kind);
 
+export interface Backup {
+  /** Backup folder = the backup container's name. */
+  name: string;
+  /** epoch ms of the newest file, 0 when the folder is empty */
+  newest: number;
+  sizeMb: number;
+  files: number;
+  /** The node of the backup container, when it is on the map. */
+  nodeId?: string;
+}
+
 export interface Server {
   id: string;
   name: string;
   host?: string;
   vcpu?: number;
   ramGb?: number;
+  /** Used fraction of the host's disk / memory (optional /api/host). */
+  diskUsed?: number;
+  memUsed?: number;
+  /** CrowdSec (optional): active bans, bans seen today, epoch ms of the newest. */
+  bansActive?: number;
+  bansToday?: number;
+  banAt?: number;
+  backups?: Backup[];
+  /** Live connections between nodes (optional /api/flows): client → server, ports, open connections. */
+  links?: Link[];
+  /** Open connections per node to outside the docker networks. */
+  egress?: Record<string, number>;
+}
+
+export interface Link {
+  from: string;
+  to: string;
+  ports: number[];
+  conns: number;
 }
 
 export interface Project {
@@ -21,6 +51,18 @@ export interface Project {
 }
 
 /** Dokploy: project → environment (production, staging…) → services. */
+/** Map preferences shared by all viewers (server /api/prefs): building order, complexes, colours. */
+export interface MapPrefs {
+  /** Project ids in the order the buildings should appear (unlisted ones follow by name). */
+  order: string[];
+  /** Complexes: groups of buildings placed together on one plate. */
+  groups: { id: string; name: string; projects: string[] }[];
+  /** Project id → colour preset key (see theme PRESETS). */
+  colors: Record<string, string>;
+}
+
+export const EMPTY_PREFS: MapPrefs = { order: [], groups: [], colors: {} };
+
 export interface Environment {
   id: string;
   projectId: string;
@@ -55,6 +97,25 @@ export interface Service {
   net?: { rxBps: number; txBps: number };
   /** Running containers right now (from container stats). */
   containers?: number;
+  /** For a helper container (db, cache, broker…): the node of the app it mostly talks to. */
+  peerId?: string;
+  /** Why the node is in error, when it is more specific than Dokploy's status (e.g. a Kuma monitor). */
+  incident?: string;
+  /** Docker container name, when the node is one container. */
+  container?: string;
+  /** Stopped by Sablier while idle (starts again on the next request): the Sablier group. */
+  sleeping?: string;
+  /** GlitchTip (optional): unresolved issues and epoch ms of the newest event. */
+  errors?: number;
+  errorAt?: number;
+  /** The newest unresolved GlitchTip issues of this node, for the inspector. */
+  issues?: { title: string; culprit?: string; count: number; lastSeen: number; level?: string; url?: string }[];
+  /** Umami (optional): visitors on the site right now. */
+  visitors?: number;
+  /** Kuma (optional): slowest response time of the site's monitors, ms. */
+  latencyMs?: number;
+  /** Days until the first TLS certificate of the service's domains expires. */
+  certDays?: number;
 }
 
 export const STAGES = ['Clone', 'Build', 'Push', 'Start', 'Health'] as const;
