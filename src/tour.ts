@@ -187,7 +187,9 @@ export function nextShot(input: TourInput): Shot {
       .map((x) => ({
         key: `quiet:${x.p.id}`,
         caption: `${x.p.name} · ${x.own.length} node${x.own.length === 1 ? '' : 's'}`,
-        reason: 'nothing urgent · visiting the buildings, most active first',
+        reason: x.own.some((n) => n.sleeping)
+          ? 'nothing urgent · asleep (Sablier) until the next request'
+          : 'nothing urgent · visiting the buildings, most active first',
         ms: 7_000,
         project: x.p.id,
         hover: x.topCpu?.id ?? null,
@@ -196,7 +198,8 @@ export function nextShot(input: TourInput): Shot {
   const overview = (): Shot => {
     const up = services.filter((s) => s.status === 'running').length;
     const down = services.filter((s) => s.status === 'error').length;
-    const parts = [`${up} running`, down ? `${down} down` : ''].filter(Boolean);
+    const asleep = services.filter((s) => s.sleeping).length;
+    const parts = [`${up} running`, asleep ? `${asleep} asleep` : '', down ? `${down} down` : ''].filter(Boolean);
     return {
       key: 'overview',
       caption: `Overview · ${parts.join(' · ')}`,
