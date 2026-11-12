@@ -134,7 +134,7 @@ export function sleepingProjects(services: Service[]) {
 
 export const SLEEPING_COMPLEX = '__sleeping';
 /** Gap between the avenue and the Sleeping complex on its left. */
-const SLEEP_GAP = 3;
+const SLEEP_GAP = 7;
 
 /**
  * Buildings in display order, in segments: each complex (members by the saved order), then the
