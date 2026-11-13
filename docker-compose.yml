@@ -7,9 +7,9 @@ services:
     # Or skip the build and use the published image:
     # image: ghcr.io/suleyman/3dokploy:latest
     restart: unless-stopped
-    #ports:
+    ports:
       # Dokploy itself listens on 3000: on the same machine, use e.g. "3100:3000".
-      #- "${HOST_PORT:-3000}:3000"
+      - "${HOST_PORT:-3000}:3000"
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?set DOKPLOY_URL in .env}
       DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:?set DOKPLOY_API_KEY in .env}
