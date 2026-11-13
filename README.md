@@ -58,6 +58,7 @@ build type and port **3000**, set the variables below, then add a domain.
 | `DOKPLOY_URL` | *required* | Your Dokploy, e.g. `https://dokploy.example.com` or `http://host.docker.internal:3000` |
 | `DOKPLOY_API_KEY` | *required* | A Dokploy API key. Only the server uses it. |
 | `BASIC_AUTH` | – | `user:password` login for the page. Set it whenever others can reach the address. |
+| `FRAME_ANCESTORS` | `'none'` | Origins allowed to embed the page in an iframe, e.g. `https://*.ablesign.tv` for AbleSign |
 | `PORT` | `3000` | Port the server listens on |
 
 Without `BASIC_AUTH`, **anyone who can open the page sees your Dokploy** (read-only, secrets

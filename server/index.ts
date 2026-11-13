@@ -29,6 +29,8 @@ try {
 }
 
 // Same-origin everything: the page only ever talks to this server.
+// FRAME_ANCESTORS lets other sites embed the page in an iframe (e.g. "https://*.ablesign.tv").
+const FRAME_ANCESTORS = process.env.FRAME_ANCESTORS?.trim() || "'none'";
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -37,7 +39,7 @@ const CSP = [
   "font-src 'self' data:",
   "connect-src 'self'",
   "worker-src 'self' blob:",
-  "frame-ancestors 'none'",
+  `frame-ancestors ${FRAME_ANCESTORS}`,
   "base-uri 'self'",
   "form-action 'self'",
 ].join('; ');
