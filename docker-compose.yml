@@ -14,6 +14,7 @@ services:
       DOKPLOY_URL: ${DOKPLOY_URL:?set DOKPLOY_URL in .env}
       DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:?set DOKPLOY_API_KEY in .env}
       BASIC_AUTH: ${BASIC_AUTH:-}
+      FRAME_ANCESTORS: ${FRAME_ANCESTORS:-'none'}
     extra_hosts:
       # Lets DOKPLOY_URL=http://host.docker.internal:3000 reach a Dokploy on the same machine.
       - host.docker.internal:host-gateway
