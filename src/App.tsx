@@ -4,7 +4,7 @@ import { ago } from './format';
 import { Breadcrumb } from './hud/Breadcrumb';
 import { Inspector } from './hud/Inspector';
 import { Kpis } from './hud/Kpis';
-import { MapControls } from './hud/MapControls';
+import { MapControls, TourCaption } from './hud/MapControls';
 import { Pipeline } from './hud/Pipeline';
 import { ProjectPanel } from './hud/ProjectPanel';
 import { Toasts } from './hud/Toasts';
@@ -29,6 +29,7 @@ export function App() {
             <Kpis />
             <Breadcrumb />
             <MapControls />
+            <TourCaption />
             <Inspector />
             <ProjectPanel />
             <Pipeline />

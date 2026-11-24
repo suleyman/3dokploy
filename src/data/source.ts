@@ -1,5 +1,5 @@
 import { Collector } from './dokploy/collector';
-import { fetchVersion, serverTransport, type Transport } from './dokploy/api';
+import { fetchContainerLogs, fetchVersion, serverTransport, type Transport } from './dokploy/api';
 import type { SourceStatus, World, WorldPatch } from './types';
 
 export type PatchListener = (patch: WorldPatch) => void;
@@ -14,6 +14,8 @@ export interface DataSource {
   logs(deploymentId: string, tail?: number): Promise<string[]>;
   /** Dokploy's version, for the header. */
   version(): Promise<string | null>;
+  /** Last log lines of one container (needs the server's DOCKER_PROXY_URL). */
+  containerLogs?(container: string, tail?: number): Promise<{ enabled: boolean; lines: string[]; error?: string }>;
 }
 
 const POLL_MS = 5000;
@@ -66,6 +68,10 @@ export class DokploySource implements DataSource {
 
   logs(deploymentId: string, tail = 60) {
     return this.collector.logsFor(deploymentId, tail);
+  }
+
+  containerLogs(container: string, tail = 40) {
+    return fetchContainerLogs(this.t, container, tail);
   }
 
   version() {

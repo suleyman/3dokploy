@@ -41,9 +41,19 @@ function ledMaterials(dim: boolean) {
 const LED = ledMaterials(false);
 const LED_DIM = ledMaterials(true);
 
-export const ledMaterial = (status: ServiceStatus, dim: boolean) => (dim ? LED_DIM : LED)[status];
+/** Running but slow to answer (Kuma response time): 1 = sluggish (yellow), 2 = very slow (orange). */
+export type Slowness = 0 | 1 | 2;
+export const slowness = (ms: number | undefined): Slowness => (ms === undefined ? 0 : ms >= 3000 ? 2 : ms >= 1200 ? 1 : 0);
 
-/** running breathes, deploying pulses fast, error blinks, idle stays dim. */
+const slowMaterial = (color: string, dim: boolean) =>
+  new THREE.MeshStandardMaterial({ color: '#000000', emissive: color, emissiveIntensity: 1, roughness: 0.4, toneMapped: false, transparent: dim, opacity: dim ? DIM_OPACITY : 1 });
+const SLOW = { 1: slowMaterial('#ffd23d', false), 2: slowMaterial('#ff8a1f', false) };
+const SLOW_DIM = { 1: slowMaterial('#ffd23d', true), 2: slowMaterial('#ff8a1f', true) };
+
+export const ledMaterial = (status: ServiceStatus, dim: boolean, slow: Slowness = 0) =>
+  status === 'running' && slow ? (dim ? SLOW_DIM : SLOW)[slow] : (dim ? LED_DIM : LED)[status];
+
+/** running breathes, deploying pulses fast, error blinks, idle stays dim; slow ones breathe faster. */
 export function animateLeds(t: number, still: boolean) {
   const level: Record<ServiceStatus, number> = still
     ? { running: 1.8, deploying: 2, error: 2.4, idle: 0.8 }
@@ -56,6 +66,11 @@ export function animateLeds(t: number, still: boolean) {
   for (const s of STATUSES) {
     LED[s].emissiveIntensity = level[s];
     LED_DIM[s].emissiveIntensity = level[s] * 0.4;
+  }
+  const slow = { 1: still ? 1.8 : 1.2 + 1.2 * (0.5 + 0.5 * Math.sin(t * 4.5)), 2: still ? 2.2 : 0.7 + 2.3 * (0.5 + 0.5 * Math.sin(t * 8)) ** 2 };
+  for (const k of [1, 2] as const) {
+    SLOW[k].emissiveIntensity = slow[k];
+    SLOW_DIM[k].emissiveIntensity = slow[k] * 0.4;
   }
 }
 

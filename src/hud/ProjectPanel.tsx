@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { isDb } from '../data/types';
 import { ago, mb, pct, rate } from '../format';
 import { useStore } from '../store';
-import { KIND_COLOR, KIND_LABEL } from '../theme';
+import { KIND_COLOR, KIND_LABEL, PRESETS } from '../theme';
 import { DeployPill, StatusDot } from './bits';
 import { CloseIcon } from './icons';
 
@@ -65,6 +65,8 @@ export function ProjectPanel() {
           <CloseIcon />
         </button>
       </header>
+
+      <BuildingSettings projectId={project.id} />
 
       <div className="stat-grid">
         <div>
@@ -135,5 +137,107 @@ export function ProjectPanel() {
         </section>
       )}
     </aside>
+  );
+}
+
+/** Colour preset, position and complex of this building (saved for everyone via /api/prefs). */
+function BuildingSettings({ projectId }: { projectId: string }) {
+  const prefs = useStore((s) => s.prefs);
+  const shared = useStore((s) => s.prefsShared);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  const s = useStore.getState();
+  const complex = prefs.groups.find((g) => g.projects.includes(projectId));
+  const color = prefs.colors[projectId];
+
+  const create = () => {
+    if (name.trim()) s.createComplex(name, projectId);
+    setNaming(false);
+    setName('');
+  };
+
+  return (
+    <section className="building-settings">
+      <h3 className="section-title">Building</h3>
+      <div className="swatches" role="radiogroup" aria-label="Colour">
+        <button type="button" className={`swatch-btn auto ${color ? '' : 'is-on'}`} onClick={() => s.setProjectColor(projectId, null)} title="Automatic colour" aria-checked={!color} role="radio">
+          Auto
+        </button>
+        {PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            className={`swatch-btn ${color === p.key ? 'is-on' : ''}`}
+            style={{ ['--swatch' as string]: p.hex }}
+            onClick={() => s.setProjectColor(projectId, p.key)}
+            title={p.label}
+            aria-label={p.label}
+            aria-checked={color === p.key}
+            role="radio"
+          />
+        ))}
+      </div>
+      <div className="row-actions">
+        <button type="button" className="text-btn" onClick={() => s.moveProject(projectId, -1)} title="Move this building one place earlier">
+          ◀ Earlier
+        </button>
+        <button type="button" className="text-btn" onClick={() => s.moveProject(projectId, 1)} title="Move this building one place later">
+          Later ▶
+        </button>
+      </div>
+      <div className="row-actions">
+        <label className="muted small" htmlFor="complex-select">
+          Complex
+        </label>
+        {naming ? (
+          <>
+            <input
+              className="complex-input"
+              autoFocus
+              value={name}
+              maxLength={40}
+              placeholder="Name of the complex"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => (e.key === 'Enter' ? create() : e.key === 'Escape' ? setNaming(false) : undefined)}
+            />
+            <button type="button" className="text-btn" onClick={create}>
+              Create
+            </button>
+          </>
+        ) : (
+          <select
+            id="complex-select"
+            className="complex-select"
+            value={complex?.id ?? ''}
+            onChange={(e) => (e.target.value === '+new' ? setNaming(true) : s.setProjectComplex(projectId, e.target.value || null))}
+          >
+            <option value="">None</option>
+            {prefs.groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.projects.length})
+              </option>
+            ))}
+            <option value="+new">+ New complex…</option>
+          </select>
+        )}
+      </div>
+      {complex && !naming && (
+        <div className="row-actions">
+          <input
+            className="complex-input"
+            key={complex.id}
+            defaultValue={complex.name}
+            maxLength={40}
+            aria-label="Rename complex"
+            onBlur={(e) => e.target.value.trim() && e.target.value !== complex.name && s.renameComplex(complex.id, e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          />
+          <button type="button" className="text-btn" onClick={() => s.removeComplex(complex.id)} title="Dissolve the complex (the buildings stay)">
+            Dissolve
+          </button>
+        </div>
+      )}
+      {shared === false && <p className="muted small">Saved in this browser only (the server can't store settings).</p>}
+    </section>
   );
 }
