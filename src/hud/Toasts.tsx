@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useStore, type EventKind } from '../store';
 
-const KINDS = new Set<EventKind>(['deploy-start', 'deploy-ok', 'deploy-fail', 'down', 'up', 'new-node']);
+const KINDS = new Set<EventKind>(['deploy-start', 'deploy-ok', 'deploy-fail', 'down', 'up', 'new-node', 'fire', 'error', 'moved']);
 const TTL = 8000;
 const MAX = 4;
 

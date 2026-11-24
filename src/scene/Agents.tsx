@@ -10,6 +10,9 @@ import { STAGES } from '../data/types';
 import { cartRoute, routeBetween, routeFromHome, routeHome, type Layout, type V3 } from '../layout';
 import { useStore } from '../store';
 import { Label } from './Label';
+import { trouble } from '../trouble';
+import { pct } from '../format';
+import { useActor, type Actor } from './actors';
 
 const CART_SPEED = 3.2;
 const TECH_SPEED = 2.3;
@@ -18,7 +21,7 @@ const FACE_RACK = Math.PI; // racks face +z, so agents look toward -z
 
 // ---- path following -----------------------------------------------------------------
 
-class Walker {
+export class Walker {
   readonly pos: THREE.Vector3;
   heading = 0;
   private readonly pts: THREE.Vector3[];
@@ -63,7 +66,7 @@ class Walker {
 
 const headingTo = (a: THREE.Vector3, b: THREE.Vector3) => Math.atan2(b.x - a.x, b.z - a.z);
 
-function dampAngle(current: number, target: number, lambda: number, dt: number) {
+export function dampAngle(current: number, target: number, lambda: number, dt: number) {
   const diff = Math.atan2(Math.sin(target - current), Math.cos(target - current));
   return current + diff * (1 - Math.exp(-lambda * dt));
 }
@@ -71,20 +74,53 @@ function dampAngle(current: number, target: number, lambda: number, dt: number) 
 // ---- carts ----------------------------------------------------------------------------
 
 /**
- * Deploy carts, plus the technician: he walks to nodes in error and leaves when Dokploy reports
- * them healthy again.
+ * Deploy carts, plus the technician: he walks to nodes in error and stays until they are healthy
+ * again; otherwise he patrols, checking busy and freshly deployed racks first.
  */
 export function Agents({ layout }: { layout: Layout }) {
   const carts = useStore((s) => s.carts);
+  const crew = useCrewSize();
   return (
     <>
       {carts.map((id) => (
         <Cart key={id} deploymentId={id} layout={layout} />
       ))}
-      <Technician layout={layout} />
-      <HomeMarker at={layout.home} />
+      {Array.from({ length: crew }, (_, i) => (
+        <Technician key={i} layout={layout} index={i} crew={crew} />
+      ))}
+      {Array.from({ length: crew }, (_, i) => (
+        <HomeMarker key={i} at={homeOf(layout, i)} />
+      ))}
     </>
   );
+}
+
+const MAX_CREW = 5;
+const CREW_COOLDOWN_MS = 30_000;
+/** Walking lanes, all inside the 1.5 m door, so technicians don't walk on top of each other. */
+const LANES = [TECH_DX, -TECH_DX, 0.2, -0.2, 0.62];
+const homeOf = (layout: Layout, i: number): V3 => [layout.home[0] + i * 0.6, 0, layout.home[2]];
+
+/** 1 technician, +1 per open incident, +1 per two racks under load; shrinks only after a quiet spell. */
+function useCrewSize() {
+  const services = useStore((s) => s.services);
+  const alerts = useStore((s) => s.alerts);
+  const wanted = useMemo(() => {
+    const incidents = new Set(
+      Object.values(alerts)
+        .filter((a) => !a.resolvedAt && a.severity === 'critical' && services[a.serviceId]?.status === 'error')
+        .map((a) => a.serviceId),
+    ).size;
+    const loaded = Object.values(services).filter((s) => s.status !== 'error' && trouble(s)).length;
+    return Math.min(MAX_CREW, 1 + incidents + Math.floor(loaded / 2));
+  }, [services, alerts]);
+  const [crew, setCrew] = useState(wanted);
+  useEffect(() => {
+    if (wanted >= crew) return setCrew(wanted);
+    const t = setTimeout(() => setCrew(wanted), CREW_COOLDOWN_MS);
+    return () => clearTimeout(t);
+  }, [wanted, crew]);
+  return crew;
 }
 
 type CartPhase = 'out' | 'docked' | 'back';
@@ -101,6 +137,9 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
 
   const group = useRef<THREE.Group>(null);
   const chassis = useRef<THREE.Group>(null);
+  const serviceId = dep?.serviceId ?? null;
+  const actor = useMemo<Actor>(() => ({ kind: 'cart', obj: group, info: () => ({ phase: sim.current.phase, target: serviceId }) }), [serviceId]);
+  useActor(`cart-${deploymentId}`, actor);
   const terminal = !dep || dep.status === 'success' || dep.status === 'failed';
   const terminalRef = useRef(terminal);
   terminalRef.current = terminal;
@@ -222,9 +261,30 @@ const Cart = memo(function Cart({ deploymentId, layout }: { deploymentId: string
 
 // ---- technician ---------------------------------------------------------------------
 
-type TechPhase = 'idle' | 'walk' | 'work' | 'home';
+type TechPhase = 'idle' | 'walk' | 'work' | 'home' | 'patrol' | 'inspect';
 
-function Technician({ layout }: { layout: Layout }) {
+/** Swaps the shared waiting spot at a route's start/end for this technician's own spot. */
+function fromHomeTo(route: V3[] | null, home: V3, end: 'start' | 'end'): V3[] | null {
+  if (!route) return null;
+  return end === 'start' ? [home, ...route.slice(1)] : [...route.slice(0, -1), home];
+}
+
+const PATROL_ROUNDS = 5; // racks checked before a break at home
+const REST_S = 8;
+
+/** Picks the next rack to check: weighted towards CPU load and an active deploy. */
+function pickPatrol(services: Record<string, { cpu: number; status: string }>, slots: Layout['slots'], not: string | null) {
+  const ids = Object.keys(slots).filter((id) => id !== not && services[id]);
+  if (!ids.length) return null;
+  const weight = (id: string) => 1 + Math.min(services[id].cpu, 2) * 4 + (services[id].status === 'deploying' ? 6 : 0);
+  let r = Math.random() * ids.reduce((a, id) => a + weight(id), 0);
+  for (const id of ids) if ((r -= weight(id)) <= 0) return id;
+  return ids[ids.length - 1];
+}
+
+function Technician({ layout, index, crew }: { layout: Layout; index: number; crew: number }) {
+  const lane = LANES[index % LANES.length];
+  const home = homeOf(layout, index);
   const alerts = useStore((s) => s.alerts);
   const services = useStore((s) => s.services);
   const still = useStore((s) => s.reducedMotion);
@@ -235,10 +295,32 @@ function Technician({ layout }: { layout: Layout }) {
       .filter((a) => !a.resolvedAt && a.severity === 'critical' && services[a.serviceId]?.status === 'error')
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((a) => a.serviceId);
-    return [...new Set(ids)].filter((id) => layout.slots[id]);
-  }, [alerts, services, layout]);
+    const all = [...new Set(ids)].filter((id) => layout.slots[id]);
+    const mine = all.filter((_, k) => k % crew === index);
+    return mine.length ? mine : all.slice(index, index + 1);
+  }, [alerts, services, layout, index, crew]);
   const queueRef = useRef(queue);
   queueRef.current = queue;
+  const servicesRef = useRef(services);
+  servicesRef.current = services;
+  const [checking, setChecking] = useState<string | null>(null);
+  /** What he is doing and why, shown over his head the whole time. */
+  const [task, setTask] = useState<string>('Starting the shift');
+  const why = (id: string | null) => {
+    const svc = id ? servicesRef.current[id] : undefined;
+    if (!svc) return 'routine round';
+    if (svc.status === 'deploying') return 'a deploy is running there';
+    if (trouble(svc)) return `rack under heavy load (CPU ${pct(svc.cpu)})`;
+    return svc.cpu >= 0.5 ? `busy rack (CPU ${pct(svc.cpu)})` : 'routine round';
+  };
+  const describe = (phase: TechPhase, id: string | null) => {
+    const svc = id ? servicesRef.current[id] : undefined;
+    const name = svc?.name ?? 'a rack';
+    if (phase === 'walk') return `→ ${name} · incident: ${svc?.incident ?? 'down'}`;
+    if (phase === 'patrol') return `→ ${name} · ${why(id)}`;
+    if (phase === 'home') return '→ depot · round done, short break';
+    return null;
+  };
 
   const [mode, setMode] = useState<TechPhase>('idle');
   const sim = useRef({
@@ -247,7 +329,20 @@ function Technician({ layout }: { layout: Layout }) {
     target: null as string | null,
     at: null as string | null,
     t: 0,
+    restUntil: 3 + index * 2.5, // the crew heads out one after another
+    inspectUntil: 0,
+    rounds: 0,
   });
+
+  // The layout changed (nodes came or went, buildings resized): a route planned on the old one would
+  // cut through the new walls. Start over from the waiting spot.
+  useEffect(() => {
+    const st = sim.current;
+    if (st.phase === 'idle' && !st.walker) return;
+    Object.assign(st, { phase: 'idle', walker: null, target: null, at: null, restUntil: st.t + 1 + index });
+    setMode('idle');
+    setChecking(null);
+  }, [layout, index]);
 
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
@@ -255,6 +350,8 @@ function Technician({ layout }: { layout: Layout }) {
   const legR = useRef<THREE.Group>(null);
   const armL = useRef<THREE.Group>(null);
   const armR = useRef<THREE.Group>(null);
+  const actor = useMemo<Actor>(() => ({ kind: 'tech', obj: root, info: () => ({ phase: sim.current.phase, target: sim.current.target ?? sim.current.at }) }), []);
+  useActor(`tech-${index}`, actor);
 
   useFrame((_, rawDt) => {
     const st = sim.current;
@@ -269,20 +366,37 @@ function Technician({ layout }: { layout: Layout }) {
       st.walker = new Walker(path);
       st.target = target;
       setMode(phase);
+      const text = describe(phase, target);
+      if (text) setTask(text);
       return true;
     };
     const next = () => {
       const from = st.at!;
       const job = queueRef.current.find((id) => id !== from);
-      if (!(job && go('walk', routeBetween(layout, from, job, TECH_DX), job))) {
-        go('home', routeHome(layout, from, TECH_DX), null);
+      if (!(job && go('walk', routeBetween(layout, from, job, lane), job))) {
+        go('home', fromHomeTo(routeHome(layout, from, lane), home, 'end'), null);
+      }
+    };
+    // Incidents first; otherwise carry on with the round or head home for a break.
+    const afterCheck = () => {
+      setChecking(null);
+      const from = st.at!;
+      if (queueRef.current.length || still) return next();
+      const target = st.rounds < PATROL_ROUNDS ? pickPatrol(servicesRef.current, layout.slots, from) : null;
+      if (!(target && go('patrol', routeBetween(layout, from, target, lane), target))) {
+        go('home', fromHomeTo(routeHome(layout, from, lane), home, 'end'), null);
       }
     };
 
     switch (st.phase) {
       case 'idle': {
         const job = queueRef.current[0];
-        if (job) go('walk', routeFromHome(layout, job, TECH_DX), job);
+        if (job) go('walk', fromHomeTo(routeFromHome(layout, job, lane), home, 'start'), job);
+        else if (!still && st.t >= st.restUntil) {
+          const target = pickPatrol(servicesRef.current, layout.slots, null);
+          st.rounds = 0;
+          if (target) go('patrol', fromHomeTo(routeFromHome(layout, target, lane), home, 'start'), target);
+        }
         break;
       }
       case 'walk':
@@ -294,6 +408,22 @@ function Technician({ layout }: { layout: Layout }) {
           } else next();
         }
         break;
+      case 'patrol':
+        if (st.walker!.step(TECH_SPEED * dt)) {
+          st.at = st.target;
+          if (queueRef.current.length) next();
+          else {
+            st.phase = 'inspect';
+            st.inspectUntil = st.t + 3 + Math.random() * 3;
+            st.rounds++;
+            setMode('inspect');
+            setChecking(st.at);
+          }
+        }
+        break;
+      case 'inspect':
+        if (queueRef.current.length || st.t >= st.inspectUntil) afterCheck();
+        break;
       case 'work':
         if (!queueRef.current.includes(st.at!)) next(); // Dokploy says it's healthy again
         break;
@@ -302,16 +432,19 @@ function Technician({ layout }: { layout: Layout }) {
           st.phase = 'idle';
           st.at = null;
           st.walker = null;
+          st.restUntil = st.t + REST_S;
           setMode('idle');
+          setTask('On a break at the depot');
         }
         break;
     }
 
     // pose
-    const walking = st.phase === 'walk' || st.phase === 'home';
+    const walking = st.phase === 'walk' || st.phase === 'home' || st.phase === 'patrol';
+    const busy = st.phase === 'work' || st.phase === 'inspect';
     if (st.walker) g.position.copy(st.walker.pos);
-    else g.position.set(...layout.home);
-    const heading = st.phase === 'work' ? FACE_RACK : st.walker ? st.walker.heading : 0;
+    else g.position.set(...home);
+    const heading = busy ? FACE_RACK : st.walker ? st.walker.heading : 0;
     g.rotation.y = dampAngle(g.rotation.y, heading, 10, dt);
 
     const swing = walking && !still ? Math.sin(st.t * 10) * 0.55 : 0;
@@ -320,7 +453,13 @@ function Technician({ layout }: { layout: Layout }) {
     if (armL.current) armL.current.rotation.x = -swing * 0.8;
     if (armR.current) {
       armR.current.rotation.x =
-        st.phase === 'work' ? (still ? -1.9 : -1.6 - Math.abs(Math.sin(st.t * 7)) * 0.7) : swing * 0.8;
+        st.phase === 'work'
+          ? still
+            ? -1.9
+            : -1.6 - Math.abs(Math.sin(st.t * 7)) * 0.7
+          : st.phase === 'inspect'
+            ? -1.2 - Math.sin(st.t * 3) * 0.25 // holding up the tablet
+            : swing * 0.8;
     }
     if (body.current) {
       body.current.position.y = walking && !still ? Math.abs(Math.sin(st.t * 10)) * 0.035 : still ? 0 : Math.sin(st.t * 2) * 0.006;
@@ -328,18 +467,24 @@ function Technician({ layout }: { layout: Layout }) {
   });
 
   return (
-    <group ref={root} position={layout.home}>
+    <group ref={root} position={home}>
       <group ref={body}>
         <TechModel legL={legL} legR={legR} armL={armL} armR={armR} />
       </group>
-      {mode === 'work' && (
-        <Label position={[0, 1.6, 0]} zIndex={9}>
+      <Label position={[0, 1.6, 0]} zIndex={mode === 'work' ? 9 : 8}>
+        {mode === 'work' ? (
           <div className="bubble">
             <span className="bubble-spinner" />
-            Investigating…
+            Investigating {services[sim.current.at ?? '']?.name ?? 'the rack'} · {services[sim.current.at ?? '']?.incident ?? 'down'}
           </div>
-        </Label>
-      )}
+        ) : mode === 'inspect' && checking ? (
+          <div className="bubble">
+            Checking {services[checking]?.name ?? 'rack'} · {why(checking)}
+          </div>
+        ) : (
+          <div className="bubble">{task}</div>
+        )}
+      </Label>
     </group>
   );
 }
@@ -360,7 +505,7 @@ function Limb({ r, len, color }: { r: number; len: number; color: string }) {
   );
 }
 
-function TechModel({ legL, legR, armL, armR }: { legL: GroupRef; legR: GroupRef; armL: GroupRef; armR: GroupRef }) {
+export function TechModel({ legL, legR, armL, armR }: { legL: GroupRef; legR: GroupRef; armL: GroupRef; armR: GroupRef }) {
   return (
     <group>
       <group ref={legL} position={[-0.075, 0.46, 0]}>

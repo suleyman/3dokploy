@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isDb } from '../data/types';
 import { SAMPLE_SECONDS } from '../data/source';
 import { ago, duration, mb, pct, rate } from '../format';
@@ -6,6 +6,7 @@ import { latestDeploys, useStore } from '../store';
 import { TRIGGER_LABEL } from '../theme';
 import { DeployPill, KindBadge, Sparkline, StatusPill } from './bits';
 import { CloseIcon, ExternalIcon } from './icons';
+import { linkLabel } from '../scene/Links';
 
 export function Inspector() {
   const id = useStore((s) => s.selectedId);
@@ -55,6 +56,37 @@ export function Inspector() {
       </div>
 
       {svc.description && <p className="insp-desc">{svc.description}</p>}
+
+      {svc.status === 'error' && (
+        <p className="incident-banner" role="alert">
+          {svc.incident ?? 'Dokploy reports this service as errored.'}
+        </p>
+      )}
+
+      {!!svc.issues?.length && (
+        <section>
+          <h3 className="section-title">
+            Errors · GlitchTip <span className="muted small">{svc.errors ?? svc.issues.length} open</span>
+          </h3>
+          <ul className="issue-list">
+            {svc.issues.map((issue, i) => (
+              <li key={issue.url ?? i}>
+                <strong className="issue-title">{issue.title}</strong>
+                {issue.culprit && <span className="issue-culprit mono">{issue.culprit}</span>}
+                <span className="muted small">
+                  {issue.count}× · last {ago(issue.lastSeen, now)}
+                  {issue.level && issue.level !== 'error' ? ` · ${issue.level}` : ''}
+                </span>
+                {issue.url && (
+                  <a className="issue-link" href={issue.url} target="_blank" rel="noopener noreferrer">
+                    Open in GlitchTip <ExternalIcon />
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="insp-card">
         <div className="insp-card-head">
@@ -150,7 +182,83 @@ export function Inspector() {
         </section>
       )}
 
+      <TalksTo id={svc.id} />
+
+      {svc.container && <ContainerLogs container={svc.container} />}
+
       <p className="insp-foot muted small">Read-only · live from Dokploy</p>
     </aside>
+  );
+}
+
+/** The container's last log lines (secrets masked by the server), refreshed every 5 s while open. */
+function ContainerLogs({ container }: { container: string }) {
+  const [state, setState] = useState<{ enabled: boolean; lines: string[]; error?: string } | null>(null);
+  const box = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      const next = await useStore.getState().fetchContainerLogs(container).catch((e: Error) => ({ enabled: true, lines: [], error: e.message }));
+      if (!alive) return;
+      setState(next);
+      if (next.enabled && !next.error) timer = setTimeout(load, 5_000); // stop polling on errors
+    };
+    void load();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [container]);
+  useEffect(() => {
+    if (box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [state]);
+  if (!state?.enabled) return null;
+  return (
+    <section>
+      <h3 className="section-title">Logs · {container}</h3>
+      {state.error ? <p className="muted small">{state.error}</p> : <pre ref={box} className="log-lines">{state.lines.join('\n') || 'No output yet.'}</pre>}
+    </section>
+  );
+}
+
+/** Live connections of this node (optional /api/flows): whom it calls, who calls it, and the internet. */
+function TalksTo({ id }: { id: string }) {
+  const links = useStore((s) => s.servers.local?.links);
+  const egress = useStore((s) => s.servers.local?.egress?.[id]);
+  const services = useStore((s) => s.services);
+  const projects = useStore((s) => s.projects);
+  const mine = (links ?? []).filter((l) => l.from === id || l.to === id);
+  if (!links || (!mine.length && !egress)) return null;
+  return (
+    <section>
+      <h3 className="section-title">Talks to</h3>
+      <ul className="talk-list">
+        {mine.map((l) => {
+          const out = l.from === id;
+          const peer = services[out ? l.to : l.from];
+          return (
+            <li key={`${l.from}>${l.to}`}>
+              <button type="button" onClick={() => peer && useStore.getState().select(peer.id)} title={out ? 'This node opens these connections' : 'These connections come in'}>
+                <span className="mono">{out ? '→' : '←'}</span>
+                <span className="truncate">
+                  {peer?.name ?? 'node'} <span className="muted small">{projects[peer?.projectId ?? '']?.name}</span>
+                </span>
+                <span className="muted small mono">{linkLabel(l)}</span>
+              </button>
+            </li>
+          );
+        })}
+        {!!egress && (
+          <li>
+            <button type="button" disabled>
+              <span className="mono">→</span>
+              <span>Internet</span>
+              <span className="muted small mono">{egress} open</span>
+            </button>
+          </li>
+        )}
+      </ul>
+    </section>
   );
 }
