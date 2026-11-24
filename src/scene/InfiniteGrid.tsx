@@ -81,7 +81,7 @@ export function InfiniteGrid({ cellSize, sectionSize, cellColor, sectionColor }:
   });
 
   return (
-    <mesh ref={mesh} rotation-x={-Math.PI / 2} position-y={-0.002} material={material} frustumCulled={false} raycast={() => null}>
+    <mesh ref={mesh} rotation-x={-Math.PI / 2} position-y={-0.002} renderOrder={-1} material={material} frustumCulled={false} raycast={() => null}>
       <planeGeometry args={[SIZE, SIZE]} />
     </mesh>
   );

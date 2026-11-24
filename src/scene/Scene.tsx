@@ -107,18 +107,23 @@ export function Scene() {
   );
 }
 
-/** Background-coloured floor (no visible edge), an endless neon grid, and a shadow catcher. */
+/**
+ * Background-coloured floor (no visible edge), an endless neon grid, and a shadow catcher.
+ * The three layers are coplanar for the depth buffer's purposes, so none of them writes depth and
+ * renderOrder fixes their stacking (floor, grid, shadow); otherwise the transparent sort flips with
+ * the camera angle and the grid vanishes under the shadow plane or z-fights with the floor.
+ */
 function Ground() {
   return (
     <>
-      <mesh rotation-x={-Math.PI / 2} position-y={-0.004}>
+      <mesh rotation-x={-Math.PI / 2} position-y={-0.004} renderOrder={-2}>
         <planeGeometry args={[1200, 1200]} />
-        <meshBasicMaterial color={BG} toneMapped={false} />
+        <meshBasicMaterial color={BG} toneMapped={false} depthWrite={false} />
       </mesh>
       <InfiniteGrid cellSize={1.2} sectionSize={6} cellColor="#0c1a2e" sectionColor="#14406a" />
       <mesh rotation-x={-Math.PI / 2} position-y={0} receiveShadow>
         <planeGeometry args={[240, 240]} />
-        <shadowMaterial transparent opacity={0.45} />
+        <shadowMaterial transparent opacity={0.45} depthWrite={false} />
       </mesh>
     </>
   );
