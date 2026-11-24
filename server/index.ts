@@ -29,7 +29,7 @@ try {
 }
 
 // Same-origin everything: the page only ever talks to this server.
-// FRAME_ANCESTORS lets other sites embed the page in an iframe (e.g. "https://*.ablesign.tv").
+// FRAME_ANCESTORS lets other sites embed the page in an iframe (e.g. "https://*.example.com").
 const FRAME_ANCESTORS = process.env.FRAME_ANCESTORS?.trim() || "'none'";
 const CSP = [
   "default-src 'self'",
